@@ -154,7 +154,7 @@ core_prompt() {
   else
     printf '%s%s%s: ' "$C_BOLD" "$1" "$C_RST" >&2
   fi
-  read -r ans || ans=""
+  read -e -r ans || ans=""
   if [[ -z "$ans" && -n "${2:-}" ]]; then ans="$2"; fi
   echo "$ans"
 }
@@ -163,7 +163,7 @@ core_prompt() {
 core_prompt_yn() {
   local ans
   printf '%s%s%s [y/N]: ' "$C_BOLD" "$1" "$C_RST" >&2
-  read -r ans || ans=""
+  read -e -r ans || ans=""
   case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
