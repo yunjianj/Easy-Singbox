@@ -72,6 +72,30 @@ service_start()   {
   fi
   ok "sing-box 服务已启动并运行"
 }
+# 校验三协议端口是否真的处于监听状态。参数：port_any(tcp) port_hy2(udp) port_tuic(udp)
+# 服务 active 只代表进程活着，不代表端口 bind 成功（如端口被占用时 sing-box 会退出重启）。
+# 客户端报 "connection refused" 的直接原因就是此处无监听，故安装/变更后必须显式校验。
+service_verify_ports() {
+  local pa=$1 ph=$2 pt=$3 bad=0 tcp udp
+  if ! command -v ss >/dev/null 2>&1; then
+    warn "未安装 ss(iproute2)，跳过端口监听校验"
+    return 0
+  fi
+  # 各协议只列一次，纯 bash 精确匹配（不依赖 ss 过滤器语法）
+  tcp=$(core_listening_ports tcp)
+  udp=$(core_listening_ports udp)
+  if [[ "$tcp" == *" $pa "* ]]; then ok "AnyTLS 监听正常 tcp/$pa"; else error "AnyTLS 未监听 tcp/$pa"; bad=1; fi
+  if [[ "$udp" == *" $ph "* ]]; then ok "Hysteria2 监听正常 udp/$ph"; else error "Hysteria2 未监听 udp/$ph"; bad=1; fi
+  if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
+  if (( bad )); then
+    error "存在未监听的端口，客户端会报 connection refused。最近日志："
+    journalctl -u sing-box -n 40 --no-pager >&2 || true
+    warn "可执行 sb → 选项 7 生成完整诊断报告"
+    return 1
+  fi
+  return 0
+}
+
 service_stop()    { systemctl stop sing-box 2>/dev/null || true; }
 service_restart() { systemctl daemon-reload; systemctl restart sing-box; }
 service_reload()  { systemctl reload sing-box 2>/dev/null || systemctl restart sing-box; }

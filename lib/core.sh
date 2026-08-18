@@ -113,25 +113,42 @@ core_sb_status() {
 PORT_HOP_LO=50001
 PORT_HOP_HI=51000
 
+# 取监听端口集合，输出形如 " 22 80 443 " 的空格包裹串，便于纯 bash 子串精确匹配。
+# 参数：proto 可选，tcp|udp，留空=两者都要。
+#
+# 实现要点（踩过的坑）：
+# 1) 一次性取出全部监听端口，而非每个候选端口 fork 一次 ss，避免循环内进程风暴；
+# 2) 绝不依赖 ss 的 `sport = :N` 过滤器语法——若该语法不被支持，ss 会返回全部条目，
+#    导致“每个端口都判为占用”的静默失效（旧实现即因此完全失效）；
+# 3) 固定使用 `-tu` 组合调用：此时 ss 输出带 Netid 列，本地地址恒为第 5 列。
+#    若只传 -t，输出无 Netid 列、本地地址在第 4 列，按固定列取会错位。
+core_listening_ports() {
+  local proto=${1:-}
+  command -v ss >/dev/null 2>&1 || { echo " "; return; }
+  local list
+  list=$(ss -lnHtu 2>/dev/null \
+         | awk -v w="$proto" 'w=="" || $1==w {print $5}' \
+         | sed 's/.*://' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ' || true)
+  echo " ${list} "
+}
+
 core_rand_port() {
   # 注：span 必须在 lo/hi 赋值后再计算，避免 bash 同条 local 内 RHS 提前展开导致 span 异常
-  local lo=49152 hi=65535 span p tries=0
+  local lo=49152 hi=65535 span p tries=0 used
   span=$((hi - lo + 1))
-  while (( ++tries <= 200 )); do
+  used=$(core_listening_ports)
+  while (( ++tries <= 100 )); do
     p=$((RANDOM % span + lo))
+    # 避让 Hysteria2 跳跃段
     (( p >= PORT_HOP_LO && p <= PORT_HOP_HI )) && continue
-    if command -v ss >/dev/null 2>&1; then
-      if ! ss -lunH "sport = :$p" >/dev/null 2>&1 && \
-         ! ss -ltnH "sport = :$p" >/dev/null 2>&1; then
-        echo "$p"; return
-      fi
-    else
-      echo "$p"; return
-    fi
+    # 纯 bash 子串匹配，循环内不再 fork
+    [[ "$used" == *" $p "* ]] && continue
+    echo "$p"; return 0
   done
-  # 兜底：SS 探测异常（如始终误报占用）时，直接返回一个高位随机端口，避免死循环卡死
+  # 兜底：探测异常时直接返回一个高位随机端口，避免死循环卡死
   p=$((RANDOM % span + lo))
   echo "$p"
+  return 0
 }
 
 core_rand_pass() {
@@ -176,12 +193,10 @@ core_prompt_yn() {
   case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
-# 校验端口是否合法且未被占用（仅检测，不阻塞）
+# 检测端口是否已被监听占用；参数：port [tcp|udp]；返回 0=占用，1=空闲/无法探测
+# 复用 core_listening_ports 做精确匹配，不依赖 ss 过滤器语法。
 core_port_in_use() {
-  local p=$1
-  if command -v ss >/dev/null 2>&1; then
-    ss -lunH "sport = :$p" >/dev/null 2>&1 || ss -ltnH "sport = :$p" >/dev/null 2>&1
-  else
-    false
-  fi
+  local p=$1 proto=${2:-} used
+  used=$(core_listening_ports "$proto")
+  [[ "$used" == *" $p "* ]]
 }

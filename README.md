@@ -25,7 +25,7 @@ bash <(curl -fsSL https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/sb.sh)
 git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bash install.sh
 ```
 
-> 安装后管理命令为 `sb`（已软链到 `/usr/local/bin/sb`）。卸载请另执行仓库内 `uninstall.sh`。
+> 安装后脚本本体存放于 `/usr/local/share/easy-singbox`，管理命令 `sb` 软链到 `/usr/local/bin/sb`。卸载请另执行仓库内 `uninstall.sh`。
 
 
 - **强制 TLS**：AnyTLS + Hysteria2 + TUIC v5 三协议共存于同一份 `config.json`，各自独立端口、共享同一份真实证书，`tls.enabled` 均为 `true`，**不支持无证书模式、不支持手动上传证书**。
@@ -102,9 +102,32 @@ sb
  [4] 重启 / 查看节点
  [5] 更新 / 切换内核版本
  [6] 更新脚本            (当前 v1.0.0)
+ [7] 诊断与日志        (排查节点不通，生成可发送的报告)
  [0] 退出
 ==============================================================
 ```
+
+## 排查节点不通
+
+选项 `[7]` 提供一键诊断，把定位问题所需的信息一次性收集齐（凭证自动脱敏，可直接复制发送）：
+
+```bash
+sb            # 选 [7] → [1] 生成完整诊断报告
+sb debug      # 等效的命令行入口，报告同时写入 /etc/sing-box/diag.log
+sb log        # 直接查看最近 200 行服务日志
+```
+
+报告包含 12 个小节：系统/内核环境（含 `bindv6only`）、服务状态、`journalctl` 日志、`sing-box check` 结果、状态文件端口、**端口监听实况**、本机自连测试（IPv4/回环分别验证）、防火墙规则、端口跳跃 REDIRECT 规则、证书有效期与 SAN、`singbox` 用户可读性、域名解析与出口 IP、脱敏后的 `config.json`。
+
+判读要点：
+
+| 客户端现象 | 含义 | 看报告哪一节 |
+| --- | --- | --- |
+| `connection refused`（主动拒绝，收到 RST） | 包已到达机器，但**端口无监听** | 第 6 节端口监听实况、第 3 节服务日志 |
+| 连接超时（无响应） | 包被丢弃，通常是**防火墙/云安全组**未放行 | 第 8 节防火墙规则 + 云厂商安全组 |
+| TLS 握手失败 / 证书错误 | 证书或 SNI 不匹配 | 第 10 节证书、第 11 节域名解析 |
+
+若需更详细日志，选 `[7] → [3]` 把 sing-box 日志级别切到 `debug`，复现问题后再生成一次报告。
 
 ## 节点导入方式
 
@@ -141,6 +164,8 @@ easy-singbox/
 │   ├── cert.sh         # 证书管理（acme.sh）
 │   ├── config.sh       # 生成 config.json
 │   ├── node.sh         # 节点 URI 生成 + 二维码
+│   ├── port_hop.sh     # Hy2 端口跳跃 REDIRECT 规则
+│   ├── diag.sh         # 一键诊断（选项 7 / sb debug）
 │   └── protocol/       # anytls / hysteria2 / tuic 片段
 ├── templates/config.json.tpl
 ├── README.md

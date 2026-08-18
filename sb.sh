@@ -37,5 +37,22 @@ if [[ -z "$DIR" || ! -f "$DIR/install.sh" ]]; then
   exit 1
 fi
 
+# 安装到持久目录后再运行。
+# 原因：此前直接在 mktemp 临时目录里 exec install.sh，导致 /usr/local/bin/sb 软链
+# 指向临时目录；/tmp 被清理或重启后 sb 失效，且残留的旧 lib 模块会与新版 sb 混用，
+# 造成“代码已修好但线上仍是旧行为”的版本错配。
+DEST="/usr/local/share/easy-singbox"
+if [[ $EUID -eq 0 ]]; then
+  echo "==> 安装到 $DEST ..."
+  mkdir -p "$DEST"
+  # 先清掉旧的模块目录，避免残留文件与新版本混用
+  rm -rf "$DEST/lib" "$DEST/templates"
+  cp -rf "$DIR/." "$DEST/"
+  chmod 755 "$DEST/sb" "$DEST/install.sh" "$DEST/uninstall.sh" 2>/dev/null || true
+  cd "$DEST"
+  exec bash ./install.sh "$@"
+fi
+
+echo "==> 非 root 运行，直接在临时目录执行（建议用 root 以安装到 $DEST）"
 cd "$DIR"
 exec bash ./install.sh "$@"

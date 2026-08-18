@@ -9,7 +9,7 @@ set -euo pipefail
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.0.7"
+SB_SCRIPT_VERSION="1.0.8"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -28,6 +28,7 @@ source "$SB_DIR/lib/protocol/hysteria2.sh"
 source "$SB_DIR/lib/protocol/tuic.sh"
 source "$SB_DIR/lib/config.sh"
 source "$SB_DIR/lib/node.sh"
+source "$SB_DIR/lib/diag.sh"
 
 # ---------- sing-box 下载/安装 ----------
 sb_latest_version() {
@@ -210,6 +211,13 @@ sb_install() {
   service_install
   service_start
 
+  # 端口监听实况校验：服务 active 不代表端口 bind 成功（端口被占用时进程会反复退出），
+  # 而客户端 "connection refused" 的直接原因正是此处无监听，故必须显式校验并中止。
+  if ! service_verify_ports "$port_any" "$port_hy2" "$port_tuic"; then
+    error "端口未正常监听，安装中止。请执行 sb → 选项 7 生成诊断报告后排查。"
+    return 1
+  fi
+
   # 软链管理命令（失败不中断安装，sb 仍可通过绝对路径运行）
   ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
   ok "管理命令已链接: $SB_SYMLINK -> $SB_DIR/sb"
@@ -275,15 +283,28 @@ sb_self_update() {
   fi
   info "从 $SB_UPDATE_BASE 更新脚本（保留 /etc/sing-box 配置与证书）..."
   local tmp; tmp=$(mktemp -d)
-  local ok=1
-  for f in install.sh sb uninstall.sh VERSION lib/core.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh lib/config.sh lib/node.sh lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
-    if ! curl -sL --max-time 60 -o "$tmp/$(basename "$f")" "$SB_UPDATE_BASE/$f"; then ok=0; break; fi
+  local upd_ok=1 f
+  # 必须保留 lib/ 目录层级：此前用 basename 下载会把 lib/*.sh 压平到根目录，
+  # 导致 lib 模块从未被真正更新（新版 sb 配旧版 lib，引发难以定位的版本错配）。
+  for f in install.sh sb uninstall.sh VERSION \
+           lib/core.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
+           lib/config.sh lib/node.sh lib/diag.sh \
+           lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
+           templates/config.json.tpl; do
+    mkdir -p "$tmp/$(dirname "$f")"
+    if ! curl -fsL --max-time 60 -o "$tmp/$f" "$SB_UPDATE_BASE/$f"; then
+      error "下载失败: $f"; upd_ok=0; break
+    fi
+    # 空文件视为失败，避免把损坏内容覆盖到本地
+    if [[ ! -s "$tmp/$f" ]]; then
+      error "下载内容为空: $f"; upd_ok=0; break
+    fi
   done
-  if [[ $ok -eq 1 ]]; then
+  if [[ $upd_ok -eq 1 ]]; then
     cp -rf "$tmp/." "$SB_DIR/" 2>/dev/null || true
-    chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh"
-    ln -sf "$SB_DIR/sb" "$SB_SYMLINK"
-    ok "脚本已更新（配置与证书保留）"
+    chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh" 2>/dev/null || true
+    ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
+    ok "脚本已更新至最新版本（配置与证书保留）。请重新运行 sb 以加载新模块。"
   else
     error "更新失败，未改动本地文件"
   fi
@@ -332,10 +353,11 @@ sb_show_menu() {
   echo " [4] 重启 / 查看节点   (reload + 打印节点)"
   echo " [5] 更新 / 切换内核版本"
   echo " [6] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
+  echo " [7] 诊断与日志        (排查节点不通，生成可发送的报告)"
   echo " [0] 退出"
   echo "=============================================================="
   local choice
-  choice=$(core_prompt "请选择 [0-6]")
+  choice=$(core_prompt "请选择 [0-7]")
   case "$choice" in
     1)
       if [[ -x "$SB_BIN" ]]; then sb_uninstall; else sb_install; fi
@@ -350,6 +372,7 @@ sb_show_menu() {
       ;;
     5) sb_version_menu || true ;;
     6) sb_self_update || true ;;
+    7) diag_menu || true ;;
     0) info "退出"; exit 0 ;;
     *) warn "无效选择" ;;
   esac
@@ -371,8 +394,10 @@ if [[ "${1:-}" == "--version" ]]; then
   shift 2
 fi
 case "${1:-}" in
-  uninstall) sb_uninstall ;;
-  install)   sb_install ;;
-  nodes)     node_gen ;;
-  *)         main_menu "$@" ;;
+  uninstall)      sb_uninstall ;;
+  install)        sb_install ;;
+  nodes)          node_gen ;;
+  debug|diag)     diag_run ;;
+  log|logs)       journalctl -u sing-box -n 200 --no-pager ;;
+  *)              main_menu "$@" ;;
 esac
