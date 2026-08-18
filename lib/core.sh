@@ -2,10 +2,14 @@
 # lib/core.sh — 工具函数、系统探测、日志、颜色
 # 仅被 sb / install.sh source，不单独执行。
 
-# ---------- 颜色（仅当输出到终端时启用）----------
-if [[ -t 1 ]]; then
-  C_RED=$(tput setaf 1); C_GRN=$(tput setaf 2); C_YEL=$(tput setaf 3)
-  C_BLU=$(tput setaf 4); C_CYN=$(tput setaf 6); C_BOLD=$(tput bold); C_RST=$(tput sgr0)
+# ---------- 颜色（仅当输出到终端且 tput 可用时启用）----------
+# 必须同时检测 tput：Alpine/BusyBox 默认无 ncurses（apk add ncurses 提供 tput），
+# 缺失时静默降级为无色，绝不因颜色问题中断脚本（v1.2.1 修复）。
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+  C_RED=$(tput setaf 1 2>/dev/null || true); C_GRN=$(tput setaf 2 2>/dev/null || true)
+  C_YEL=$(tput setaf 3 2>/dev/null || true); C_BLU=$(tput setaf 4 2>/dev/null || true)
+  C_CYN=$(tput setaf 6 2>/dev/null || true); C_BOLD=$(tput bold 2>/dev/null || true)
+  C_RST=$(tput sgr0 2>/dev/null || true)
 else
   C_RED=""; C_GRN=""; C_YEL=""; C_BLU=""; C_CYN=""; C_BOLD=""; C_RST=""
 fi

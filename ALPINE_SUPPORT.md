@@ -711,7 +711,8 @@ adduser -S -H -s /sbin/nologin -D singbox
 
 ### 4.8 `tput` 颜色
 
-`lib/core.sh:7` 使用 `tput setaf`。Alpine 需 `apk add ncurses`。若缺失则现有 `else` 分支自动降级为无颜色，不影响功能。
+`lib/core.sh` 使用 `tput setaf` 初始化颜色变量。Alpine 需 `apk add ncurses`（注意：Alpine 上没有名为 `tput` 的软件包，tput 由 `ncurses` 提供）。
+v1.2.1 起颜色初始化同时检测 `command -v tput`，缺失时（无论是否终端）一律静默降级为无色，不影响功能——**绝不允许因颜色问题中断脚本**。
 
 ---
 
@@ -761,7 +762,7 @@ adduser -S -H -s /sbin/nologin -D singbox
 ### 5.3 边界场景
 
 - [ ] Alpine 上未安装 `virt-what` → 主面板虚拟化显示 `unknown`（可接受）
-- [ ] Alpine 上无 `tput` → 颜色降级为空（已有兜底）
+- [ ] Alpine 上无 `tput` → 颜色降级为空（v1.2.1 起 `command -v tput` 守卫，脚本正常跑）
 - [ ] Alpine 上无 `uuidgen` → `core_rand_uuid()` 走 `/dev/urandom` + `sed` 兜底（已有）
 - [ ] Alpine 上无 `sha256sum` → `core_rand_pass()` 不受影响；但 `sb_download()` 的二进制校验会走警告分支
 - [ ] Alpine 容器环境（LXC/Docker）→ OpenRC 可能无法正常运行 PID1，需在文档中标注「仅支持非容器 Alpine」

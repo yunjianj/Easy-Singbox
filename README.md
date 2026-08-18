@@ -45,6 +45,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 - `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13，下载后强制比对官方 `checksums.sha256`，校验失败即拒绝安装）
 - `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
 - `qrencode`（二维码，缺失时仅跳过二维码不中断）
+- `ncurses`（可选，提供 `tput` 彩色输出；缺失时静默降级为无色，不影响功能。Alpine 上安装：`apk add ncurses`）
 
 ## 三种协议
 
