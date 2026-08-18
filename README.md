@@ -7,17 +7,17 @@
 以 root 在目标服务器执行以下任一命令，自动下载并进入安装主页面：
 
 ```bash
-bash <(wget -qO- https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/sb.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
 ```
 
 或（使用 curl）：
 
 ```bash
-bash <(curl -fsSL https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/sb.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
 ```
 
-> 若 jsDelivr 拉取缓慢，可改用 GitHub 源（偶尔有 CDN 缓存延迟）：
-> `bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)`
+> 默认使用 GitHub raw 官方域名（避免第三方 CDN 缓存被投毒）。若拉取缓慢可改用 jsDelivr 镜像（仅引导下载，安装后自更新同样默认走官方源）：
+> `bash <(wget -qO- https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/sb.sh)`
 
 也可先克隆再安装（已装 git 时）：
 
@@ -41,8 +41,8 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 
 脚本仅依赖 `curl` + `bash` + 常见 coreutils。其余工具在安装时自动安装：
 
-- `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13）
-- `acme.sh`（证书申请）
+- `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13，下载后强制比对官方 `checksums.sha256`，校验失败即拒绝安装）
+- `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
 - `qrencode`（二维码，缺失时仅跳过二维码不中断）
 
 ## 三种协议
@@ -86,7 +86,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.0.0
+      easy-singbox  管理面板  v1.1.2
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -94,7 +94,7 @@ sb
  BBR       : 已开启 (bbr)
  IP / 地区 : 1.2.3.4  |  Hong Kong / CN
  Sing-Box  : 已运行  v1.13.0  (3 协议在线)
- 脚本版本  : v1.1.1  [已是最新]
+ 脚本版本  : v1.1.2  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -103,7 +103,7 @@ sb
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
  [7] 更新 / 切换内核版本
- [8] 更新脚本            (当前 v1.1.1)
+ [8] 更新脚本            (当前 v1.1.2)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
  [0] 退出
 ==============================================================
@@ -143,15 +143,31 @@ sb log        # 直接查看最近 200 行服务日志
 ## 卸载与更新
 
 - **卸载**：主页面选项 1（已安装时变为卸载），或独立执行 `bash uninstall.sh`。会二次确认是否一并删除证书目录与 acme.sh 账户。
-- **切换版本**：选项 7，下载指定版本前备份当前二进制（`/usr/local/bin/sing-box.bak`），失败可手动恢复。
-- **更新脚本**：选项 8，从配置源（`sb` 顶部 `SB_UPDATE_BASE`）拉取最新代码，保留本机 `/etc/sing-box/config.json` 与证书。
+- **切换版本**：选项 7，下载指定版本前备份当前二进制（`/usr/local/bin/sing-box.bak`），失败可手动恢复。下载的二进制强制比对官方 `checksums.sha256`，校验失败打印期望/实际哈希并拒绝安装。
+- **更新脚本**：选项 8，从 GitHub raw 官方源（`sb` 顶部 `SB_UPDATE_BASE`）拉取最新代码，保留本机 `/etc/sing-box/config.json` 与证书。覆盖本地前会先用 `cmp -s` 列出所有变更文件并要求确认，拒绝则本地不被改动。
 - **版本自检**：主面板标题与「脚本版本」行显示当前版本（`sb` 内 `SB_SCRIPT_VERSION` 常量），并自动对比仓库根 `VERSION` 文件——已最新显示绿色 `[已是最新]`，有新版本显示红色 `[发现新版本 vX，可执行选项 8 更新]`，检测失败（网络受限）显示黄色 `[远程版本未知]`。检测结果本地缓存 10 分钟，不会拖慢菜单。发布新版本时请同步修改 `SB_SCRIPT_VERSION` 与 `VERSION` 文件。
+
+## 安全设计
+
+**供应链完整性（v1.1.2）**
+
+- **sing-box 二进制**：每次下载（安装/切换内核版本）都会同时下载官方 `checksums.sha256` 并比对，校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件；系统缺失 `sha256sum`/`shasum` 时显著警告并要求显式确认，绝不静默跳过。
+- **脚本自更新**：更新源固定为 GitHub raw 官方域名（`SB_UPDATE_BASE`），覆盖本地前列出变更文件并要求确认；拒绝则本地不被改动。
+- **acme.sh 安装**：不再 `curl | sh` 盲执行，改为 git clone 官方仓库或下载官方 master 单文件，先落盘、校验非空与 shebang，再本地执行；兜底 `get.acme.sh` 同样先落盘校验并要求确认。
+- **引导脚本 sb.sh**：解压后校验 `install.sh` shebang 及 `sb`/`lib/*.sh` 齐套，不完整即中止。
+
+**最小权限（v1.1.2）**
+
+- **精确授权**：服务以 `singbox` 系统用户降权运行，仅 `config.json` 与证书两文件（`ssl/fullchain.pem`、`ssl/privkey.pem`）授予 `singbox`；`.state`、`nodes.txt`、`.cf.env`（Cloudflare Token）、`diag.log` 一律保持 `root:root 600`，即使进程沦陷也不泄漏 DNS 编辑权与全部节点凭证。旧版本被 `chown -R` 污染的存量文件在安装/重签时会自动纠回。
+- **umask 077**：脚本内敏感文件从创建起即为 600，无 644 暴露窗口。
+- **systemd 加固**：单元删除多余的 `AmbientCapabilities=CAP_NET_BIND_SERVICE`，增加 `NoNewPrivileges=true`、`ProtectSystem=strict`、`ReadOnlyPaths=/etc/sing-box`、`ProtectHome=true`、`PrivateTmp=true`。
 
 ## 已知限制
 
 - **AnyTLS 客户端兼容性**：部分客户端不识别 `anytls://` URI，需使用 outbound JSON 兜底导入（见上）。
-- 降权运行以 `singbox` 系统用户执行；本期端口均为高位随机，无需 `CAP_NET_BIND_SERVICE`（已预留）。
+- 降权运行以 `singbox` 系统用户执行；端口均为高位随机，无需 `CAP_NET_BIND_SERVICE`（systemd 单元已移除该 capability）。
 - DNS-01 仅支持 Cloudflare，其他 DNS 服务商本期未实现。
+- 自更新默认从 GitHub raw 官方源拉取（非 jsDelivr），网络受 GitHub 限制的区域需代理或手动更新。
 
 ## 目录结构
 
@@ -172,5 +188,6 @@ easy-singbox/
 │   └── protocol/       # anytls / hysteria2 / tuic 片段
 ├── templates/config.json.tpl
 ├── README.md
+├── SECURITY_FIXES.md    # 安全修复交付文档
 └── TESTING.md
 ```
