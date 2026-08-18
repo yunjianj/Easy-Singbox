@@ -49,7 +49,15 @@ service_install() {
   systemctl enable sing-box
 }
 
-service_start()   { systemctl daemon-reload; systemctl start sing-box; }
+service_start()   {
+  systemctl daemon-reload
+  systemctl start sing-box
+  # 重启服务后重新应用 Hysteria2 端口跳跃重定向（如已配置）
+  if [[ -f "$SB_STATE" ]]; then
+    set -a; . "$SB_STATE"; set +a
+    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2"
+  fi
+}
 service_stop()    { systemctl stop sing-box 2>/dev/null || true; }
 service_restart() { systemctl daemon-reload; systemctl restart sing-box; }
 service_reload()  { systemctl reload sing-box 2>/dev/null || systemctl restart sing-box; }

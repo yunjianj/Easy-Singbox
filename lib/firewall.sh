@@ -58,7 +58,10 @@ fw_close_temp_port() {
   esac
 }
 
-# 开放端口段（如 50001-51000），用于 Hysteria2 端口跳跃。proto: tcp|udp；range: lo-hi
+# 开放端口段（如 50001-51000）。注意：Hysteria2 端口跳跃由 lib/port_hop.sh 通过
+# REDIRECT 在 PREROUTING 阶段将跳跃段重定向到基础监听端口，经重定向后的报文
+# 目的端口变为基础端口，因此 INPUT 只需放行基础端口即可（见 fw_apply_choice）。
+# 此函数保留供需要直接放行某端口段时调用。proto: tcp|udp；range: lo-hi
 fw_open_range() {
   local proto=$1 range=$2 perm=${3:-permanent}
   case "$FW_BACKEND" in
@@ -105,10 +108,11 @@ fw_disable() {
   esac
 }
 
-# 按用户选择开放端口。参数：choice p_any p_hy2 p_tuic [hy2_hop_range]
+# 按用户选择开放端口。参数：choice p_any p_hy2 p_tuic
 # choice: 1=全部 2=关闭防火墙 3=不开放
+# 注：Hysteria2 跳跃段经 REDIRECT 重定向到基础端口 p_hy2，INPUT 只需放行 p_hy2。
 fw_apply_choice() {
-  local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4 hop=${5:-}
+  local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4
   fw_detect
   case "$choice" in
     1)
@@ -116,15 +120,14 @@ fw_apply_choice() {
       fw_open_port tcp "$p_any" permanent
       fw_open_port udp "$p_hy2" permanent
       fw_open_port udp "$p_tuic" permanent
-      [[ -n "$hop" ]] && fw_open_range udp "$hop" permanent
-      ok "已通过 $FW_BACKEND 开放 80 + 三协议端口 + Hy2 跳跃段"
+      ok "已通过 $FW_BACKEND 开放 80 + 三协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
       ;;
     2)
       fw_disable
       warn "已关闭防火墙，开放所有端口（存在安全风险，请确认网络环境可信）"
       ;;
     3)
-      warn "未开放任何端口，请自行在防火墙/安全组中放行 80（仅 HTTP-01 需要）、三协议端口及 Hy2 跳跃段 $hop"
+      warn "未开放任何端口，请自行在防火墙/安全组中放行 80（仅 HTTP-01 需要）、三协议端口及 Hy2 基础端口 $p_hy2"
       ;;
   esac
 }

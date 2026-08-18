@@ -9,13 +9,12 @@ config_gen() {
         pass_any=$5 pass_hy2=$6 pass_tuic=$7 uuid_tuic=$8 \
         obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}}
 
-  # Hy2 实际监听端口：启用跳跃时为范围（sing-box 1.12+ 通过 listen_port 范围实现），
-  # 否则为单端口。节点 URI 用的 server_port 取范围首端口。
+  # Hy2 实际监听端口：始终为基础整数端口（sing-box 要求 uint16，核心不支持服务端端口跳跃）。
+  # 节点 URI 的 server_port 始终用基础端口 port_hy2（真实监听端口），
+  # 范围通过 mport 携带（官方出站字段为 server_ports）。服务端跳跃由 lib/port_hop.sh
+  # 的 REDIRECT 把范围转发到该基础端口实现，故“只放行基础端口”也能连，
+  # 客户端跳跃需额外在外部防火墙/安全组放行整个范围。
   local hy2_listen="$port_hy2" port_hy2_node="$port_hy2"
-  if [[ -n "$hop_hy2" ]]; then
-    hy2_listen="$hop_hy2"
-    port_hy2_node="${hop_hy2%-*}"
-  fi
 
   # 端口不可重复（P2 约束）
   if [[ "$port_any" == "$port_hy2" || "$port_any" == "$port_tuic" || "$port_hy2" == "$port_tuic" ]]; then
@@ -41,7 +40,7 @@ config_gen() {
     printf '  "inbounds": [\n'
     proto_anytls_inbound "$port_any" "$pass_any" "$domain"
     printf ',\n'
-    proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$hop_hy2"
+    proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2"
     printf ',\n'
     proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain"
     printf '\n  ],\n'
@@ -58,6 +57,7 @@ config_gen() {
 DOMAIN=$domain
 PORT_ANYTLS=$port_any
 PORT_HY2=$port_hy2_node
+PORT_HY2_LISTEN=$port_hy2
 PORT_TUIC=$port_tuic
 PASS_ANYTLS=$pass_any
 PASS_HY2=$pass_hy2
@@ -68,6 +68,9 @@ HOP_HY2=$hop_hy2
 EOF
   chmod 600 "$SB_STATE"; chown root:root "$SB_STATE" 2>/dev/null || true
 
+  # 清空旧的端口跳跃重定向规则（幂等）
+  hop_remove
+
   # 校验配置
   if ! "$SB_BIN" check -c "$SB_CONF"; then
     error "config.json 校验失败，请检查配置"
@@ -75,6 +78,10 @@ EOF
   fi
   # 降权运行：让 singbox 用户可读配置/证书
   service_chown_conf
+  # 应用 Hysteria2 端口跳跃（服务端 REDIRECT；无跳跃则仅清理旧规则）
+  if [[ -n "$hop_hy2" ]]; then
+    hop_apply "$port_hy2" "$hop_hy2"
+  fi
   ok "config.json 已生成并通过 sing-box check"
 }
 

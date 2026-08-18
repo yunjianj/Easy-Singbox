@@ -2,16 +2,10 @@
 # lib/protocol/hysteria2.sh — Hysteria2 inbound 片段生成（UDP/QUIC）
 # 强制 TLS，无证书模式不可用。可选 salamander obfs（传入第4参数为 obfs 密码）。
 proto_hysteria2_inbound() {
-  local port=$1 pass=$2 domain=$3 obfs=${4:-} hop=${5:-}
-  # sing-box 1.12+ 已移除独立的 hop_ports 字段：端口跳跃通过 listen_port 直接写范围字符串实现
-  local listen="$port"
-  [[ -n "$hop" ]] && listen="$hop"
-  local lp_line
-  if [[ -n "$hop" ]]; then
-    lp_line="\"listen_port\": \"$listen\""
-  else
-    lp_line="\"listen_port\": $listen"
-  fi
+  local port=$1 pass=$2 domain=$3 obfs=${4:-}
+  # 端口跳跃由 lib/port_hop.sh 通过 iptables/nftables REDIRECT 实现，
+  # 此处 listen_port 必须是 sing-box 要求的 uint16 整数（基础监听端口）。
+  local lp_line="\"listen_port\": $port"
   if [[ -n "$obfs" ]]; then
     cat <<EOF
   {

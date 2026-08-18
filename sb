@@ -9,7 +9,7 @@ set -euo pipefail
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.0.4"
+SB_SCRIPT_VERSION="1.0.5"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -21,6 +21,7 @@ SB_UPDATE_BASE="${SB_UPDATE_BASE:-https://cdn.jsdelivr.net/gh/yunjianj/Easy-Sing
 source "$SB_DIR/lib/core.sh"
 source "$SB_DIR/lib/service.sh"
 source "$SB_DIR/lib/firewall.sh"
+source "$SB_DIR/lib/port_hop.sh"
 source "$SB_DIR/lib/cert.sh"
 source "$SB_DIR/lib/protocol/anytls.sh"
 source "$SB_DIR/lib/protocol/hysteria2.sh"
@@ -183,14 +184,18 @@ sb_install() {
 
   # 端口开放策略（回车默认 [1]）
   echo "端口开放策略："
-  echo "  [1] 全部（80 + 三协议端口 + Hy2 跳跃段）"
+  echo "  [1] 全部（80 + 三协议端口；跳跃段经 REDIRECT 自动生效）"
   echo "  [2] 开放所有端口（关闭防火墙）"
   echo "  [3] 不开放（手动在防火墙/安全组配置）"
-  # 启用跳跃时 Hy2 实际监听范围为跳跃段，防火墙按该段开放（首端口=节点 server_port）
-  local port_hy2_eff="$port_hy2"
-  [[ -n "$hop_hy2" ]] && port_hy2_eff="${hop_hy2%-*}"
+  # Hysteria2 实际监听为基础端口 port_hy2；跳跃段由 lib/port_hop.sh 通过
+  # REDIRECT 重定向到该端口，因此防火墙只需开放基础端口即可。
   local fwchoice; fwchoice=$(core_prompt "选择" "1")
-  fw_apply_choice "$fwchoice" "$port_any" "$port_hy2_eff" "$port_tuic" "$hop_hy2"
+  fw_apply_choice "$fwchoice" "$port_any" "$port_hy2" "$port_tuic"
+  if [[ -n "$hop_hy2" ]]; then
+    warn "已启用 Hysteria2 端口跳跃（$hop_hy2）。本机防火墙已放行基础端口 $port_hy2；" \
+         "若需客户端真正使用跳跃，请在云安全组/上游防火墙额外放行整个 UDP 范围 $hop_hy2，" \
+         "否则客户端只能连基础端口 $port_hy2（仍可正常用，只是不跳）。"
+  fi
 
   # 生成配置
   config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
@@ -218,6 +223,8 @@ sb_uninstall() {
   if ! core_prompt_yn "确认卸载 sing-box？将停止服务并删除二进制/配置（节点信息将丢失）"; then
     info "已取消卸载"; return 0
   fi
+  # 清理 Hysteria2 端口跳跃重定向规则
+  hop_remove
   service_remove_unit
   rm -f "$SB_BIN" "$SB_SYMLINK" "${SB_BIN}.bak"
   rm -f "$SB_CONF" "$SB_STATE" "$SB_NODES" "$SB_CF_ENV"
@@ -264,7 +271,7 @@ sb_self_update() {
   info "从 $SB_UPDATE_BASE 更新脚本（保留 /etc/sing-box 配置与证书）..."
   local tmp; tmp=$(mktemp -d)
   local ok=1
-  for f in install.sh sb uninstall.sh VERSION lib/core.sh lib/service.sh lib/firewall.sh lib/cert.sh lib/config.sh lib/node.sh lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
+  for f in install.sh sb uninstall.sh VERSION lib/core.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh lib/config.sh lib/node.sh lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
     if ! curl -sL --max-time 60 -o "$tmp/$(basename "$f")" "$SB_UPDATE_BASE/$f"; then ok=0; break; fi
   done
   if [[ $ok -eq 1 ]]; then
