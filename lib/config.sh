@@ -9,17 +9,24 @@ config_gen() {
         pass_any=$5 pass_hy2=$6 pass_tuic=$7 uuid_tuic=$8 \
         obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}}
 
+  # Hy2 实际监听端口：启用跳跃时为范围（sing-box 1.12+ 通过 listen_port 范围实现），
+  # 否则为单端口。节点 URI 用的 server_port 取范围首端口。
+  local hy2_listen="$port_hy2" port_hy2_node="$port_hy2"
+  if [[ -n "$hop_hy2" ]]; then
+    hy2_listen="$hop_hy2"
+    port_hy2_node="${hop_hy2%-*}"
+  fi
+
   # 端口不可重复（P2 约束）
   if [[ "$port_any" == "$port_hy2" || "$port_any" == "$port_tuic" || "$port_hy2" == "$port_tuic" ]]; then
     error "三个协议端口不能重复（anytls=$port_any hy2=$port_hy2 tuic=$port_tuic）"
     return 1
   fi
-  # Hysteria2 跳跃段不可与任一监听端口重叠
+  # Hysteria2 跳跃段即 Hy2 监听端口，故仅检查与 anytls / tuic 固定监听端口是否重叠
   if [[ -n "$hop_hy2" ]]; then
     local hlo hhi
     hlo=${hop_hy2%-*}; hhi=${hop_hy2#*-}
     if (( port_any >= hlo && port_any <= hhi )) || \
-       (( port_hy2 >= hlo && port_hy2 <= hhi )) || \
        (( port_tuic >= hlo && port_tuic <= hhi )); then
       error "Hysteria2 跳跃段 $hop_hy2 与某个监听端口重叠，请更换端口或跳跃段"
       return 1
@@ -34,7 +41,7 @@ config_gen() {
     printf '  "inbounds": [\n'
     proto_anytls_inbound "$port_any" "$pass_any" "$domain"
     printf ',\n'
-    proto_hysteria2_inbound "$port_hy2" "$pass_hy2" "$domain" "$obfs_hy2" "$hop_hy2"
+    proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$hop_hy2"
     printf ',\n'
     proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain"
     printf '\n  ],\n'
@@ -50,7 +57,7 @@ config_gen() {
   cat > "$SB_STATE" <<EOF
 DOMAIN=$domain
 PORT_ANYTLS=$port_any
-PORT_HY2=$port_hy2
+PORT_HY2=$port_hy2_node
 PORT_TUIC=$port_tuic
 PASS_ANYTLS=$pass_any
 PASS_HY2=$pass_hy2

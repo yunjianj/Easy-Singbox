@@ -9,7 +9,7 @@ set -euo pipefail
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.0.1"
+SB_SCRIPT_VERSION="1.0.2"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -158,8 +158,11 @@ sb_install() {
   echo "  [1] 全部（80 + 三协议端口 + Hy2 跳跃段）"
   echo "  [2] 仅三协议端口 + Hy2 跳跃段（HTTP-01 签发时已临时放行 80）"
   echo "  [3] 不开放（手动在防火墙/安全组配置）"
+  # 启用跳跃时 Hy2 实际监听范围为跳跃段，防火墙按该段开放（首端口=节点 server_port）
+  local port_hy2_eff="$port_hy2"
+  [[ -n "$hop_hy2" ]] && port_hy2_eff="${hop_hy2%-*}"
   local fwchoice; fwchoice=$(core_prompt "选择" "2")
-  fw_apply_choice "$fwchoice" "$port_any" "$port_hy2" "$port_tuic" "$hop_hy2"
+  fw_apply_choice "$fwchoice" "$port_any" "$port_hy2_eff" "$port_tuic" "$hop_hy2"
 
   # 生成配置
   config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
