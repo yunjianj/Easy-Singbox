@@ -9,7 +9,7 @@ set -euo pipefail
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.0.3"
+SB_SCRIPT_VERSION="1.0.4"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -131,17 +131,45 @@ sb_install() {
     cert_issue_http01 "$domain" || return 1
   fi
 
-  info "证书就绪，正在生成随机端口与凭证（如长时间无输出请检查终端）..."
-  # 端口 + 凭证（默认随机，可后续在选项 2 修改）
-  local port_any port_hy2 port_tuic pass_any pass_hy2 pass_tuic uuid
-  local hop_hy2=""
-  port_any=$(core_rand_port); port_hy2=$(core_rand_port); port_tuic=$(core_rand_port)
+  # 凭证始终随机生成（不可记忆，无手动必要），端口才需要选择
+  local pass_any pass_hy2 pass_tuic uuid
   pass_any=$(core_rand_pass); pass_hy2=$(core_rand_pass); pass_tuic=$(core_rand_pass)
   uuid=$(core_rand_uuid)
+  info "证书就绪，正在生成凭证与端口（如长时间无输出请检查终端）..."
 
-  # Hysteria2 端口跳跃（增强抗封锁能力）
+  # 三协议端口：随机生成 / 手动输入
+  local port_any port_hy2 port_tuic port_way
+  echo "三协议端口生成方式："
+  echo "  [1] 随机（自动生成高位端口，三个端口互不相同）"
+  echo "  [2] 手动输入（分别指定 AnyTLS / Hysteria2 / TUIC 端口）"
+  port_way=$(core_prompt "选择" "1")
+  case "$port_way" in
+    2)
+      while true; do
+        port_any=$(core_prompt "AnyTLS 端口" "")
+        port_hy2=$(core_prompt "Hysteria2 端口" "")
+        port_tuic=$(core_prompt "TUIC 端口" "")
+        if [[ "$port_any" =~ ^[0-9]+$ && "$port_hy2" =~ ^[0-9]+$ && "$port_tuic" =~ ^[0-9]+$ \
+              && "$port_any" != "$port_hy2" && "$port_any" != "$port_tuic" && "$port_hy2" != "$port_tuic" \
+              && "$port_any" -ge 1 && "$port_any" -le 65535 \
+              && "$port_hy2" -ge 1 && "$port_hy2" -le 65535 \
+              && "$port_tuic" -ge 1 && "$port_tuic" -le 65535 ]]; then
+          break
+        fi
+        warn "端口需为 1-65535 的整数，且三个端口互不相同，请重新输入"
+      done
+      ;;
+    *)
+      port_any=$(core_rand_port); port_hy2=$(core_rand_port); port_tuic=$(core_rand_port)
+      while [[ "$port_any" == "$port_hy2" || "$port_any" == "$port_tuic" || "$port_hy2" == "$port_tuic" ]]; do
+        port_hy2=$(core_rand_port); port_tuic=$(core_rand_port)
+      done
+      ;;
+  esac
+
+  # Hysteria2 端口跳跃（增强抗封锁能力，默认段 50001-51000）
   echo "Hysteria2 端口跳跃：可为客户端提供端口轮换，增强抗封锁能力。"
-  local enable_hop hop_way
+  local enable_hop hop_hy2=""
   enable_hop=$(core_prompt "是否启用 Hysteria2 端口跳跃" "y")
   case "$enable_hop" in
     n|N|no|NO)
@@ -149,19 +177,7 @@ sb_install() {
       info "不启用 Hysteria2 端口跳跃"
       ;;
     *)
-      echo "  Hysteria2 端口段生成方式："
-      echo "    [1] 随机（自动在高位数位生成一段范围，无需记忆）"
-      echo "    [2] 手动输入（如 50001-51000）"
-      hop_way=$(core_prompt "选择" "1")
-      case "$hop_way" in
-        2)
-          hop_hy2=$(core_prompt "请输入 Hysteria2 端口段(格式 lo-hi)" "50001-51000")
-          ;;
-        *)
-          hop_hy2=$(core_rand_port_range "$port_any" "$port_tuic")
-          info "已生成随机跳跃段: $hop_hy2"
-          ;;
-      esac
+      hop_hy2=$(core_prompt "Hysteria2 跳跃段(留空使用默认 50001-51000)" "50001-51000")
       ;;
   esac
 

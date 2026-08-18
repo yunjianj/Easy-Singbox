@@ -134,24 +134,6 @@ core_rand_port() {
   echo "$p"
 }
 
-# 生成随机高位端口范围（宽 width），避让指定固定端口，用于 Hysteria2 端口跳跃。
-# 用法：core_rand_port_range [避让端口...]  -> 输出 "lo-hi"
-core_rand_port_range() {
-  local width=1000 max_lo=64535 lo hi tries=0 collide p
-  while (( ++tries <= 100 )); do
-    lo=$((RANDOM % (max_lo - 49152 + 1) + 49152))
-    hi=$((lo + width - 1))
-    collide=0
-    for p in "$@"; do
-      [[ -z "$p" ]] && continue
-      if (( p >= lo && p <= hi )); then collide=1; break; fi
-    done
-    (( collide == 0 )) && { echo "$lo-$hi"; return; }
-  done
-  # 兜底：始终冲突时仍返回一个范围（config_gen 会二次校验提示）
-  echo "$lo-$hi"
-}
-
 core_rand_pass() {
   local len=${1:-16}
   # 注意：head -c 会提前关闭管道导致 tr 收到 SIGPIPE(141)；在 set -o pipefail 下
