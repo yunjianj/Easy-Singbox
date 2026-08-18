@@ -7,14 +7,17 @@
 以 root 在目标服务器执行以下任一命令，自动下载并进入安装主页面：
 
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
+bash <(wget -qO- https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/sb.sh)
 ```
 
 或（使用 curl）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
+bash <(curl -fsSL https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/sb.sh)
 ```
+
+> 若 jsDelivr 拉取缓慢，可改用 GitHub 源（偶尔有 CDN 缓存延迟）：
+> `bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)`
 
 也可先克隆再安装（已装 git 时）：
 
