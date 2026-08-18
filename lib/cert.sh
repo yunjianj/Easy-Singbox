@@ -61,10 +61,17 @@ cert_install_acme() {
 cert_install_files() {
   local domain=$1
   mkdir -p "$SB_DIR_SSL"
+  # 根据 init 系统选择 reloadcmd：OpenRC 下 rc-service restart，systemd 下 systemctl reload
+  local reload_cmd
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    reload_cmd="rc-service sing-box restart 2>/dev/null || true"
+  else
+    reload_cmd="systemctl is-enabled sing-box >/dev/null 2>&1 && systemctl reload sing-box || true"
+  fi
   "$ACME_HOME/acme.sh" --install-cert -d "$domain" \
     --key-file      "$SB_DIR_SSL/privkey.pem" \
     --fullchain-file "$SB_DIR_SSL/fullchain.pem" \
-    --reloadcmd "systemctl is-enabled sing-box >/dev/null 2>&1 && systemctl reload sing-box || true" --ecc
+    --reloadcmd "$reload_cmd" --ecc
   chown root:root "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"
   chmod 600 "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"
   # 精确授权：仅把 config.json 与证书两文件交给 singbox，敏感文件保持 root:root 600
@@ -112,7 +119,11 @@ cert_issue_dns01_cf() {
 cert_renew() {
   [[ -r "$SB_CF_ENV" ]] && set -a && . "$SB_CF_ENV" && set +a
   "$ACME_HOME/acme.sh" --renew-all --ecc || "$ACME_HOME/acme.sh" --cron
-  ok "续期检查完成（acme.sh cron 会自动续期，reloadcmd 指向 systemctl reload sing-box）"
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    ok "续期检查完成（acme.sh cron 会自动续期，reloadcmd 指向 rc-service sing-box restart）"
+  else
+    ok "续期检查完成（acme.sh cron 会自动续期，reloadcmd 指向 systemctl reload sing-box）"
+  fi
 }
 
 # 变更证书配置（主页面选项 3）

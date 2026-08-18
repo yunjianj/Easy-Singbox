@@ -15,6 +15,32 @@ _d_mask() {
   sed -E 's/("(password|uuid)"[[:space:]]*:[[:space:]]*")[^"]*"/\1***"/g' 2>/dev/null || true
 }
 
+# 统一日志查看入口，按 init 系统选择数据源。参数：行数（默认 80）
+diag_print_logs() {
+  local lines=${1:-80}
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    echo "--- OpenRC 日志 $SB_LOG_FILE (最近 $lines 行) ---"
+    tail -n "$lines" "$SB_LOG_FILE" 2>/dev/null || echo "日志文件不可用"
+  else
+    echo "--- journald 日志 (最近 $lines 行) ---"
+    journalctl -u sing-box -n "$lines" --no-pager 2>/dev/null || echo "journalctl 不可用"
+  fi
+}
+
+# 获取服务状态摘要（第 2 节），按 init 系统输出
+diag_service_status_line() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    local status
+    status=$(rc-service sing-box status 2>/dev/null || true)
+    echo "status    : $status"
+    echo "enabled   : $(rc-update show default 2>/dev/null | grep -w sing-box || echo 'disabled')"
+  else
+    echo "is-active : $(systemctl is-active sing-box 2>/dev/null || true)"
+    echo "is-enabled: $(systemctl is-enabled sing-box 2>/dev/null || true)"
+    systemctl status sing-box --no-pager -n 0 2>/dev/null | head -12 || true
+  fi
+}
+
 # 判断某端口是否处于监听状态。参数：tcp|udp port；返回 0=在监听
 # 复用 core_listening_ports，避免依赖 ss 过滤器语法（不支持时会返回全部条目造成误判）
 diag_port_listening() {
@@ -49,12 +75,10 @@ diag_collect() {
   echo "sing-box 二进制: $([[ -x "$SB_BIN" ]] && "$SB_BIN" version 2>/dev/null | head -1 || echo '未安装')"
 
   _d_sec "2. 服务状态"
-  echo "is-active : $(systemctl is-active sing-box 2>/dev/null || true)"
-  echo "is-enabled: $(systemctl is-enabled sing-box 2>/dev/null || true)"
-  systemctl status sing-box --no-pager -n 0 2>/dev/null | head -12 || true
+  diag_service_status_line
 
   _d_sec "3. 服务日志（最近 80 行，含崩溃原因）"
-  journalctl -u sing-box -n 80 --no-pager 2>/dev/null || echo "journalctl 不可用"
+  diag_print_logs 80
 
   _d_sec "4. 配置校验（sing-box check）"
   if [[ -x "$SB_BIN" && -f "$SB_CONF" ]]; then
@@ -81,7 +105,11 @@ diag_collect() {
       echo "--- 按协议逐个核对 ---"
       # 缺少 ss 时监听集合为空，会把所有端口误报为“未监听”，必须显式区分，避免误导排查
       if ! command -v ss >/dev/null 2>&1; then
-        echo "未安装 ss(iproute2)，无法核对监听状态；请先安装：apt install iproute2 / yum install iproute"
+        if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+          echo "未安装 ss(iproute2)，无法核对监听状态；请先安装：apk add iproute2"
+        else
+          echo "未安装 ss(iproute2)，无法核对监听状态；请先安装：apt install iproute2 / yum install iproute"
+        fi
         exit 0
       fi
       if diag_port_listening tcp "${PORT_ANYTLS:-0}"; then
@@ -200,7 +228,7 @@ diag_verdict() {
     . "$SB_STATE" 2>/dev/null || true
     local pa="${PORT_ANYTLS:-0}" ph="${PORT_HY2_LISTEN:-${PORT_HY2:-0}}" pt="${PORT_TUIC:-0}"
     local svc_up=0 pa_ok=-1 ph_ok=-1 pt_ok=-1 local_ok=0 ext_ok=0 myip=""
-    systemctl is-active --quiet sing-box 2>/dev/null && svc_up=1 || svc_up=0
+    service_is_active && svc_up=1 || svc_up=0
     if command -v ss >/dev/null 2>&1; then
       core_port_in_use "$pa" tcp && pa_ok=1 || pa_ok=0
       core_port_in_use "$ph" udp && ph_ok=1 || ph_ok=0
@@ -265,11 +293,21 @@ diag_toggle_log_level() {
 diag_menu() {
   echo "诊断与日志："
   echo "  [1] 生成完整诊断报告（推荐，一次性收集所有排查信息）"
-  echo "  [2] 查看实时日志（journalctl -f，Ctrl+C 退出）"
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    echo "  [2] 查看实时日志（tail -f $SB_LOG_FILE，Ctrl+C 退出）"
+  else
+    echo "  [2] 查看实时日志（journalctl -f，Ctrl+C 退出）"
+  fi
   echo "  [3] 切换 sing-box 日志级别（info <-> debug）"
   local c; c=$(core_prompt "选择" "1")
   case "$c" in
-    2) journalctl -u sing-box -f --no-pager 2>/dev/null || true ;;
+    2)
+      if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+        tail -f "$SB_LOG_FILE" 2>/dev/null || true
+      else
+        journalctl -u sing-box -f --no-pager 2>/dev/null || true
+      fi
+      ;;
     3) diag_toggle_log_level || true ;;
     *) diag_run || true ;;
   esac

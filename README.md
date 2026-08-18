@@ -35,6 +35,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 ## 支持系统
 
 - Debian 11/12、Ubuntu 20.04/22.04/24.04 等 systemd 发行版（x86_64 / aarch64）
+- **Alpine Linux 3.19+**（OpenRC init，v1.2.0 起支持，x86_64 / aarch64；容器环境内的 Alpine 不支持，因容器通常不运行 init 系统）
 - 防火墙后端自动适配：`ufw → firewalld → iptables`，均无则跳过并提示
 
 ## 依赖
@@ -86,7 +87,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.1.2
+      easy-singbox  管理面板  v1.2.0
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -94,7 +95,7 @@ sb
  BBR       : 已开启 (bbr)
  IP / 地区 : 1.2.3.4  |  Hong Kong / CN
  Sing-Box  : 已运行  v1.13.0  (3 协议在线)
- 脚本版本  : v1.1.2  [已是最新]
+ 脚本版本  : v1.2.0  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -103,7 +104,7 @@ sb
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
  [7] 更新 / 切换内核版本
- [8] 更新脚本            (当前 v1.1.2)
+ [8] 更新脚本            (当前 v1.2.0)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
  [0] 退出
 ==============================================================
@@ -160,7 +161,12 @@ sb log        # 直接查看最近 200 行服务日志
 
 - **精确授权**：服务以 `singbox` 系统用户降权运行，仅 `config.json` 与证书两文件（`ssl/fullchain.pem`、`ssl/privkey.pem`）授予 `singbox`；`.state`、`nodes.txt`、`.cf.env`（Cloudflare Token）、`diag.log` 一律保持 `root:root 600`，即使进程沦陷也不泄漏 DNS 编辑权与全部节点凭证。旧版本被 `chown -R` 污染的存量文件在安装/重签时会自动纠回。
 - **umask 077**：脚本内敏感文件从创建起即为 600，无 644 暴露窗口。
-- **systemd 加固**：单元删除多余的 `AmbientCapabilities=CAP_NET_BIND_SERVICE`，增加 `NoNewPrivileges=true`、`ProtectSystem=strict`、`ReadOnlyPaths=/etc/sing-box`、`ProtectHome=true`、`PrivateTmp=true`。
+- **systemd 加固**：单元删除多余的 `AmbientCapabilities=CAP_NET_BIND_SERVICE`，增加 `NoNewPrivileges=true`、`ProtectSystem=strict`、`ReadOnlyPaths=/etc/sing-box`、`ProtectHome=true`、`PrivateTmp=true`。OpenRC（Alpine）下等价实现：`supervise-daemon` 崩溃自动重启（`respawn_max=0`）、`rc_ulimit="-n 100000"`、`checkpath` 限权日志目录。
+
+**双 init 支持（v1.2.0）**
+
+- 新增 `lib/init.sh` init 系统探测层：自动识别 systemd / OpenRC，服务管理（启停/状态/自启/日志）全部按 init 系统适配。Debian/Ubuntu 走 systemd，Alpine 走 OpenRC（`rc-service` / `rc-update`）。
+- OpenRC 下日志写入 `/var/log/sing-box/sing-box.log`，`sb log` / 诊断报告 / 安装提示均已适配；`reload` 语义等价 `restart`（sing-box 不支持 SIGHUP 热重载）。
 
 ## 已知限制
 
@@ -168,6 +174,7 @@ sb log        # 直接查看最近 200 行服务日志
 - 降权运行以 `singbox` 系统用户执行；端口均为高位随机，无需 `CAP_NET_BIND_SERVICE`（systemd 单元已移除该 capability）。
 - DNS-01 仅支持 Cloudflare，其他 DNS 服务商本期未实现。
 - 自更新默认从 GitHub raw 官方源拉取（非 jsDelivr），网络受 GitHub 限制的区域需代理或手动更新。
+- **Alpine 容器环境不支持**（OpenRC 依赖真实 PID1），仅支持 Alpine 虚拟机/物理机。
 
 ## 目录结构
 
@@ -178,7 +185,8 @@ easy-singbox/
 ├── uninstall.sh        # 独立卸载入口
 ├── lib/
 │   ├── core.sh         # 工具/系统探测/日志/颜色
-│   ├── service.sh      # systemd 管理 + 降权
+│   ├── init.sh         # init 系统探测（systemd/OpenRC）
+│   ├── service.sh      # 服务管理（systemd/OpenRC 双适配）+ 降权
 │   ├── firewall.sh     # 防火墙后端适配
 │   ├── cert.sh         # 证书管理（acme.sh）
 │   ├── config.sh       # 生成 config.json
@@ -188,6 +196,7 @@ easy-singbox/
 │   └── protocol/       # anytls / hysteria2 / tuic 片段
 ├── templates/config.json.tpl
 ├── README.md
+├── ALPINE_SUPPORT.md    # Alpine 适配开发指南
 ├── SECURITY_FIXES.md    # 安全修复交付文档
 └── TESTING.md
 ```

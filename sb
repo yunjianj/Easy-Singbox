@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.1.2"
+SB_SCRIPT_VERSION="1.2.0"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -22,6 +22,7 @@ SB_UPDATE_BASE="${SB_UPDATE_BASE:-https://raw.githubusercontent.com/yunjianj/Eas
 
 # ---------- 载入模块 ----------
 source "$SB_DIR/lib/core.sh"
+source "$SB_DIR/lib/init.sh"
 source "$SB_DIR/lib/service.sh"
 source "$SB_DIR/lib/firewall.sh"
 source "$SB_DIR/lib/port_hop.sh"
@@ -311,7 +312,11 @@ sb_uninstall() {
   else
     warn "保留证书目录与 acme.sh 账户"
   fi
-  userdel singbox 2>/dev/null || true
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    deluser singbox 2>/dev/null || true
+  else
+    userdel singbox 2>/dev/null || true
+  fi
   ok "卸载完成"
 }
 
@@ -350,7 +355,7 @@ sb_self_update() {
   # 必须保留 lib/ 目录层级：此前用 basename 下载会把 lib/*.sh 压平到根目录，
   # 导致 lib 模块从未被真正更新（新版 sb 配旧版 lib，引发难以定位的版本错配）。
   for f in install.sh sb uninstall.sh VERSION \
-           lib/core.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
+           lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
            lib/config.sh lib/node.sh lib/diag.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
            templates/config.json.tpl; do
@@ -368,7 +373,7 @@ sb_self_update() {
     # 确认前绝不写 $SB_DIR（供应链防护：即便更新源被投毒，用户仍可拒绝）。
     local changed=() diffcnt=0
     for f in install.sh sb uninstall.sh VERSION \
-             lib/core.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
+             lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
              lib/config.sh lib/node.sh lib/diag.sh \
              lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
              templates/config.json.tpl; do
@@ -499,6 +504,12 @@ case "${1:-}" in
   install)        sb_install ;;
   nodes)          node_gen ;;
   debug|diag)     diag_run ;;
-  log|logs)       journalctl -u sing-box -n 200 --no-pager ;;
+  log|logs)
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      tail -n 200 /var/log/sing-box/sing-box.log 2>/dev/null || echo "日志文件不可用"
+    else
+      journalctl -u sing-box -n 200 --no-pager
+    fi
+    ;;
   *)              main_menu "$@" ;;
 esac

@@ -43,8 +43,8 @@ if ! head -1 "$DIR/install.sh" | grep -qE '^#!.*sh'; then
   echo "解压内容异常：install.sh 缺少 shebang，已中止（疑似下载被篡改）" >&2
   exit 1
 fi
-for _f in "$DIR/sb" "$DIR/uninstall.sh" "$DIR/lib/core.sh" "$DIR/lib/service.sh" \
-          "$DIR/lib/firewall.sh" "$DIR/lib/port_hop.sh" "$DIR/lib/cert.sh" \
+for _f in "$DIR/sb" "$DIR/uninstall.sh" "$DIR/lib/core.sh" "$DIR/lib/init.sh" \
+          "$DIR/lib/service.sh" "$DIR/lib/firewall.sh" "$DIR/lib/port_hop.sh" "$DIR/lib/cert.sh" \
           "$DIR/lib/config.sh" "$DIR/lib/node.sh" "$DIR/lib/diag.sh" \
           "$DIR/lib/protocol/anytls.sh" "$DIR/lib/protocol/hysteria2.sh" "$DIR/lib/protocol/tuic.sh"; do
   if [[ ! -f "$_f" ]]; then

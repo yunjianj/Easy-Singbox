@@ -93,7 +93,7 @@ core_detect_ip_region() {
 core_sb_status() {
   local installed running version proto
   if [[ -x "$SB_BIN" ]]; then installed="已安装"; else installed="未安装"; fi
-  if systemctl is-active --quiet sing-box 2>/dev/null; then running="已运行"; else running="未运行"; fi
+  if service_is_active; then running="已运行"; else running="未运行"; fi
   if [[ -x "$SB_BIN" ]]; then
     version=$("$SB_BIN" version 2>/dev/null | head -1 | awk '{print $3}') || version="?"
   else

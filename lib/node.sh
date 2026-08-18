@@ -74,6 +74,12 @@ JSON
       echo ""
     done
   else
-    warn "未安装 qrencode，已跳过二维码。可安装后执行 sb 选“查看节点”重新生成（apt install qrencode / yum install qrencode）"
+    local pkg_hint
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      pkg_hint="apk add qrencode"
+    else
+      pkg_hint="apt install qrencode / yum install qrencode"
+    fi
+    warn "未安装 qrencode，已跳过二维码。可安装后执行 sb 选“查看节点”重新生成（$pkg_hint）"
   fi
 }

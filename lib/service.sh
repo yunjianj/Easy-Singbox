@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# lib/service.sh — systemd 单元管理（幂等）
+# lib/service.sh — 服务单元管理（systemd / OpenRC 双 init 适配，幂等）
+# 依赖 lib/init.sh 提供的 INIT_SYSTEM 变量；所有函数签名与 systemd 时代保持一致。
 
-# 写入 systemd 单元文件（已存在则覆盖，内容固定 → 幂等）
+# 写入服务单元文件（已存在则覆盖，内容固定 → 幂等）
 service_write_unit() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    service_write_openrc_unit
+    return
+  fi
   cat > "$SB_SERVICE" <<'EOF'
 [Unit]
 Description=sing-box service
@@ -31,11 +36,48 @@ WantedBy=multi-user.target
 EOF
 }
 
+# 生成 OpenRC init 脚本（Alpine）
+# 使用 supervise-daemon 实现崩溃自动重启（respawn_max=0 等价 systemd Restart=always）。
+service_write_openrc_unit() {
+  cat > "$SB_SERVICE" <<'OPENRC_EOF'
+#!/sbin/openrc-run
+# OpenRC init script for sing-box
+# Managed by easy-singbox — do not edit manually
+
+description="sing-box service"
+command="/usr/local/bin/sing-box"
+command_args="run -c /etc/sing-box/config.json"
+supervise_daemon_args="--user singbox --group singbox --stdout /var/log/sing-box/sing-box.log --stderr /var/log/sing-box/sing-box.log"
+pidfile="/run/sing-box.pid"
+respawn_delay=5
+respawn_max=0
+rc_ulimit="-n 100000"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  checkpath -d -m 0755 -o singbox:singbox /var/log/sing-box
+  "$command" check -c /etc/sing-box/config.json || return 1
+}
+OPENRC_EOF
+  chmod 755 "$SB_SERVICE"
+}
+
 # 创建专用低权限用户（幂等）
 service_ensure_user() {
   if ! id singbox >/dev/null 2>&1; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin singbox 2>/dev/null || \
-    useradd --system --no-create-home singbox 2>/dev/null || true
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      # BusyBox adduser: -S=system, -H=no-home, -s=shell, -D=不询问密码
+      adduser -S -H -s /sbin/nologin -D singbox 2>/dev/null || \
+      adduser -S -H -s /sbin/nologin singbox 2>/dev/null || \
+      adduser -S -H singbox 2>/dev/null || true
+    else
+      useradd --system --no-create-home --shell /usr/sbin/nologin singbox 2>/dev/null || \
+      useradd --system --no-create-home singbox 2>/dev/null || true
+    fi
   fi
 }
 
@@ -64,11 +106,23 @@ service_chown_conf() {
 service_install() {
   service_ensure_user
   service_write_unit
-  systemctl daemon-reload
-  systemctl enable sing-box
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    rc-update add sing-box default 2>/dev/null || true
+    # acme.sh 续期依赖 cron；Alpine 需确保 cron 已安装并运行（仅提示，不强制）
+    if ! rc-service crond status 2>/dev/null | grep -qw started; then
+      warn "cron 服务未运行，acme.sh 证书将无法自动续期。请安装并启动：apk add dcron && rc-update add crond default && rc-service crond start"
+    fi
+  else
+    systemctl daemon-reload
+    systemctl enable sing-box
+  fi
 }
 
-service_start()   {
+service_start() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    service_start_openrc
+    return
+  fi
   systemctl daemon-reload
   # systemctl start 仅表示 systemd 接受了启动请求，不保证进程真的起来；
   # 用 || true 避免 set -e 在 start 失败时直接中止，以便下方健康检查能打印真实日志。
@@ -91,6 +145,28 @@ service_start()   {
   fi
   ok "sing-box 服务已启动并运行"
 }
+
+service_start_openrc() {
+  rc-service sing-box start 2>/dev/null || true
+  # 重新应用端口跳跃（与 systemd 分支一致）
+  if [[ -f "$SB_STATE" ]]; then
+    set -a; . "$SB_STATE"; set +a
+    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2"
+  fi
+  # 健康检查：等待服务起来（最多 15s），否则打印日志并失败
+  local i
+  for i in $(seq 1 15); do
+    rc-service sing-box status 2>/dev/null | grep -qw started && break
+    sleep 1
+  done
+  if ! rc-service sing-box status 2>/dev/null | grep -qw started; then
+    error "sing-box 服务未能启动，节点将无法连接。最近日志："
+    tail -n 30 /var/log/sing-box/sing-box.log >&2 2>/dev/null || true
+    return 1
+  fi
+  ok "sing-box 服务已启动并运行"
+}
+
 # 校验三协议端口是否真的处于监听状态。参数：port_any(tcp) port_hy2(udp) port_tuic(udp)
 # 服务 active 只代表进程活着，不代表端口 bind 成功（如端口被占用时 sing-box 会退出重启）。
 # 客户端报 "connection refused" 的直接原因就是此处无监听，故安装/变更后必须显式校验。
@@ -108,24 +184,71 @@ service_verify_ports() {
   if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
   if (( bad )); then
     error "存在未监听的端口，客户端会报 connection refused。最近日志："
-    journalctl -u sing-box -n 40 --no-pager >&2 || true
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      tail -n 40 /var/log/sing-box/sing-box.log >&2 2>/dev/null || true
+    else
+      journalctl -u sing-box -n 40 --no-pager >&2 || true
+    fi
     warn "可执行 sb → 选项 9 生成完整诊断报告"
     return 1
   fi
   return 0
 }
 
-service_stop()    { systemctl stop sing-box 2>/dev/null || true; }
-service_restart() { systemctl daemon-reload; systemctl restart sing-box; }
-service_reload()  { systemctl reload sing-box 2>/dev/null || systemctl restart sing-box; }
-service_disable() { systemctl disable sing-box 2>/dev/null || true; }
+service_stop() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    rc-service sing-box stop 2>/dev/null || true
+  else
+    systemctl stop sing-box 2>/dev/null || true
+  fi
+}
 
-service_is_active() { systemctl is-active --quiet sing-box 2>/dev/null; }
+service_restart() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    rc-service sing-box restart 2>/dev/null || true
+  else
+    systemctl daemon-reload
+    systemctl restart sing-box
+  fi
+}
+
+service_reload() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    # OpenRC 的 reload 发 SIGHUP，sing-box 不支持热重载，restart 等价
+    rc-service sing-box restart 2>/dev/null || true
+  else
+    systemctl reload sing-box 2>/dev/null || systemctl restart sing-box
+  fi
+}
+
+service_disable() {
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    rc-update del sing-box default 2>/dev/null || true
+  else
+    systemctl disable sing-box 2>/dev/null || true
+  fi
+}
+
+# 服务是否运行；参数可选（默认 sing-box），供 firewalld 等其它服务探测复用
+service_is_active() {
+  local svc=${1:-sing-box}
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    rc-service "$svc" status 2>/dev/null | grep -qw started
+  else
+    systemctl is-active --quiet "$svc" 2>/dev/null
+  fi
+}
 
 # 卸载时清理单元
 service_remove_unit() {
-  systemctl stop sing-box 2>/dev/null || true
-  systemctl disable sing-box 2>/dev/null || true
-  rm -f "$SB_SERVICE"
-  systemctl daemon-reload 2>/dev/null || true
+  if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    rc-service sing-box stop 2>/dev/null || true
+    rc-update del sing-box default 2>/dev/null || true
+    rm -f "$SB_SERVICE"
+  else
+    systemctl stop sing-box 2>/dev/null || true
+    systemctl disable sing-box 2>/dev/null || true
+    rm -f "$SB_SERVICE"
+    systemctl daemon-reload 2>/dev/null || true
+  fi
 }

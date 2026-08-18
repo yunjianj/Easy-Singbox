@@ -11,7 +11,7 @@ FW_BACKEND=""
 fw_detect() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw active; then
     FW_BACKEND="ufw"
-  elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+  elif command -v firewall-cmd >/dev/null 2>&1 && service_is_active firewalld 2>/dev/null; then
     FW_BACKEND="firewalld"
   elif command -v iptables >/dev/null 2>&1; then
     FW_BACKEND="iptables"
@@ -120,7 +120,15 @@ fw_close_http_temp() {
 fw_disable() {
   case "$FW_BACKEND" in
     ufw)       ufw disable >/dev/null 2>&1 || true ;;
-    firewalld) systemctl stop firewalld 2>/dev/null || true; systemctl disable firewalld 2>/dev/null || true ;;
+    firewalld)
+      if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+        rc-service firewalld stop 2>/dev/null || true
+        rc-update del firewalld default 2>/dev/null || true
+      else
+        systemctl stop firewalld 2>/dev/null || true
+        systemctl disable firewalld 2>/dev/null || true
+      fi
+      ;;
     iptables)  iptables -P INPUT ACCEPT 2>/dev/null || true; iptables -F INPUT 2>/dev/null || true ;;
     none)      : ;;
   esac
