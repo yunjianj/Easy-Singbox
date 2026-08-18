@@ -26,7 +26,7 @@ cert_install_files() {
   "$ACME_HOME/acme.sh" --install-cert -d "$domain" \
     --key-file      "$SB_DIR_SSL/privkey.pem" \
     --fullchain-file "$SB_DIR_SSL/fullchain.pem" \
-    --reloadcmd "systemctl reload sing-box" --ecc
+    --reloadcmd "systemctl is-enabled sing-box >/dev/null 2>&1 && systemctl reload sing-box || true" --ecc
   chown root:root "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"
   chmod 600 "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"
   # 证书/配置目录交给 singbox 用户读取（降权运行）
