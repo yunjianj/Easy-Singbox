@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# sb — easy-singbox 管理命令本体
+# 首次运行由 install.sh exec 调用，安装后通过 /usr/local/bin/sb 软链调用。
+# 两者都进入同一主页面。
+
+set -euo pipefail
+
+# 解析脚本真实目录（兼容软链）
+SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# 自更新源（留空则禁用；发布后可在此填写 raw 仓库地址）
+SB_UPDATE_BASE="${SB_UPDATE_BASE:-}"
+
+# ---------- 载入模块 ----------
+source "$SB_DIR/lib/core.sh"
+source "$SB_DIR/lib/service.sh"
+source "$SB_DIR/lib/firewall.sh"
+source "$SB_DIR/lib/cert.sh"
+source "$SB_DIR/lib/protocol/anytls.sh"
+source "$SB_DIR/lib/protocol/hysteria2.sh"
+source "$SB_DIR/lib/protocol/tuic.sh"
+source "$SB_DIR/lib/config.sh"
+source "$SB_DIR/lib/node.sh"
+
+# ---------- sing-box 下载/安装 ----------
+sb_latest_version() {
+  curl -s --max-time 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest \
+    | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"//;s/^v//'
+}
+
+sb_download() {
+  local version=$1 arch=$2
+  local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
+  local tmp; tmp=$(mktemp -d)
+  info "下载 sing-box v${version} (${arch}) ..."
+  if ! curl -sL --retry 3 --max-time 180 -o "$tmp/sb.tar.gz" "$url"; then
+    error "下载失败: $url"; rm -rf "$tmp"; return 1
+  fi
+  tar -xzf "$tmp/sb.tar.gz" -C "$tmp"
+  local bin; bin=$(find "$tmp" -name sing-box -type f | head -1)
+  if [[ -z "$bin" ]]; then error "压缩包内未找到 sing-box 二进制"; rm -rf "$tmp"; return 1; fi
+  install -m 755 "$bin" "$SB_BIN"
+  rm -rf "$tmp"
+  ok "sing-box v${version} 已安装到 $SB_BIN"
+}
+
+# ---------- 安装主流程 ----------
+sb_install() {
+  core_root_check
+  if [[ -x "$SB_BIN" ]]; then
+    warn "sing-box 已安装。如需重装请先执行卸载（主页面选项 1 -> 卸载）。"
+    return 0
+  fi
+
+  local arch; arch=$(core_detect_arch)
+  local ver; ver=${SB_VERSION_OVERRIDE:-$(sb_latest_version)}
+  sb_download "$ver" "$arch" || return 1
+
+  # 提前创建低权限用户，保证后续生成的配置/证书可被读取
+  service_ensure_user
+
+  # 证书 + 域名
+  local domain mode token
+  domain=$(core_prompt "节点域名（用于 TLS 证书与节点连接）" "")
+  [[ -z "$domain" ]] && { error "域名不能为空"; return 1; }
+
+  echo "证书验证方式："
+  echo "  [1] HTTP-01（需 80 端口空闲 + 域名 A 记录指向本机）"
+  echo "  [2] DNS-01 Cloudflare（需 CF API Token，无需 80）"
+  mode=$(core_prompt "选择验证方式" "1")
+
+  cert_install_acme || return 1
+  if [[ "$mode" == "2" ]]; then
+    token=$(core_prompt "Cloudflare API Token")
+    cert_issue_dns01_cf "$domain" "$token" || return 1
+  else
+    cert_issue_http01 "$domain" || return 1
+  fi
+
+  # 端口 + 凭证（默认随机，可后续在选项 2 修改）
+  local port_any port_hy2 port_tuic pass_any pass_hy2 pass_tuic uuid
+  local hop_hy2=""
+  port_any=$(core_rand_port); port_hy2=$(core_rand_port); port_tuic=$(core_rand_port)
+  pass_any=$(core_rand_pass); pass_hy2=$(core_rand_pass); pass_tuic=$(core_rand_pass)
+  uuid=$(core_rand_uuid)
+
+  # Hysteria2 端口跳跃（默认 50001-51000，随机端口会自动避让该段）
+  echo "Hysteria2 端口跳跃：可为客户端提供端口轮换，增强抗封锁能力（默认段 50001-51000）。"
+  local enable_hop
+  enable_hop=$(core_prompt "是否启用 Hysteria2 端口跳跃" "y")
+  case "$enable_hop" in
+    n|N|no|NO)
+      hop_hy2=""
+      info "不启用 Hysteria2 端口跳跃"
+      ;;
+    *)
+      hop_hy2=$(core_prompt "Hysteria2 跳跃段(留空使用默认 50001-51000)" "50001-51000")
+      ;;
+  esac
+
+  # 端口开放策略
+  echo "端口开放策略："
+  echo "  [1] 全部（80 + 三协议端口 + Hy2 跳跃段）"
+  echo "  [2] 仅三协议端口 + Hy2 跳跃段（HTTP-01 签发时已临时放行 80）"
+  echo "  [3] 不开放（手动在防火墙/安全组配置）"
+  local fwchoice; fwchoice=$(core_prompt "选择" "2")
+  fw_apply_choice "$fwchoice" "$port_any" "$port_hy2" "$port_tuic" "$hop_hy2"
+
+  # 生成配置
+  config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
+             "$pass_any" "$pass_hy2" "$pass_tuic" "$uuid" "" "$hop_hy2" || return 1
+
+  # 服务
+  service_install
+  service_start
+
+  # 软链管理命令
+  ln -sf "$SB_DIR/sb" "$SB_SYMLINK"
+  ok "管理命令已链接: $SB_SYMLINK -> $SB_DIR/sb"
+
+  # 节点输出
+  node_gen
+}
+
+# ---------- 卸载 ----------
+sb_uninstall() {
+  core_root_check
+  if [[ ! -x "$SB_BIN" && ! -f "$SB_CONF" ]]; then
+    warn "未检测到已安装的 sing-box"
+    return 0
+  fi
+  if ! core_prompt_yn "确认卸载 sing-box？将停止服务并删除二进制/配置（节点信息将丢失）"; then
+    info "已取消卸载"; return 0
+  fi
+  service_remove_unit
+  rm -f "$SB_BIN" "$SB_SYMLINK" "${SB_BIN}.bak"
+  rm -f "$SB_CONF" "$SB_STATE" "$SB_NODES" "$SB_CF_ENV"
+  if core_prompt_yn "同时删除证书目录 /etc/sing-box/ssl 与 acme.sh 账户(~/.acme.sh)？"; then
+    rm -rf "$SB_DIR_SSL"
+    rm -rf "$ACME_HOME"
+    ok "已删除证书与 acme.sh 账户"
+  else
+    warn "保留证书目录与 acme.sh 账户"
+  fi
+  userdel singbox 2>/dev/null || true
+  ok "卸载完成"
+}
+
+# ---------- 版本切换（选项 5）----------
+sb_version_menu() {
+  core_root_check
+  [[ -x "$SB_BIN" ]] || { error "尚未安装 sing-box"; return 1; }
+  local latest; latest=$(sb_latest_version)
+  info "最新版本: v$latest"
+  local ver; ver=$(core_prompt "要切换到的版本（如 1.13.0，留空=最新）" "$latest")
+  [[ -z "$ver" ]] && ver=$latest
+  local arch; arch=$(core_detect_arch)
+  if [[ -f "$SB_BIN" ]]; then cp -f "$SB_BIN" "${SB_BIN}.bak" 2>/dev/null || true; fi
+  if sb_download "$ver" "$arch"; then
+    service_reload
+    ok "已切换至 v$ver（旧版本备份: ${SB_BIN}.bak，可手动恢复）"
+  else
+    [[ -f "${SB_BIN}.bak" ]] && mv -f "${SB_BIN}.bak" "$SB_BIN"
+    error "下载失败，已回滚到原版本"
+  fi
+}
+
+# ---------- 自更新（选项 6）----------
+sb_self_update() {
+  core_root_check
+  if [[ -z "$SB_UPDATE_BASE" ]]; then
+    warn "未配置更新源 SB_UPDATE_BASE（发布仓库后可在此填写 raw 地址），跳过自更新"
+    return 0
+  fi
+  info "从 $SB_UPDATE_BASE 更新脚本（保留 /etc/sing-box 配置与证书）..."
+  local tmp; tmp=$(mktemp -d)
+  local ok=1
+  for f in install.sh sb uninstall.sh lib/core.sh lib/service.sh lib/firewall.sh lib/cert.sh lib/config.sh lib/node.sh lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
+    if ! curl -sL --max-time 60 -o "$tmp/$(basename "$f")" "$SB_UPDATE_BASE/$f"; then ok=0; break; fi
+  done
+  if [[ $ok -eq 1 ]]; then
+    cp -rf "$tmp/." "$SB_DIR/" 2>/dev/null || true
+    chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh"
+    ln -sf "$SB_DIR/sb" "$SB_SYMLINK"
+    ok "脚本已更新（配置与证书保留）"
+  else
+    error "更新失败，未改动本地文件"
+  fi
+  rm -rf "$tmp"
+}
+
+# ---------- 主页面 ----------
+sb_show_menu() {
+  clear 2>/dev/null || true
+  local os arch virt bbr ipregion status inst running ver proto
+  os=$(core_detect_os)
+  arch=$(core_detect_arch)
+  # AES-NI 探测
+  local aes="不支持"; grep -q 'aes' /proc/cpuinfo 2>/dev/null && aes="支持"
+  virt=$(core_detect_virt)
+  bbr=$(core_detect_bbr)
+  ipregion=$(core_detect_ip_region)
+  # arch 显示名
+  local arch_disp="$arch (AES-NI: $aes)"
+  IFS='|' read -r inst running ver proto <<< "$(core_sb_status)"
+
+  echo "=============================================================="
+  echo -e "      ${C_BOLD}easy-singbox  管理面板${C_RST}"
+  echo "--------------------------------------------------------------"
+  echo " 系统      : $os"
+  echo " 指令集    : $arch_disp"
+  echo " 虚拟化    : $virt"
+  echo " BBR       : $bbr"
+  echo " IP / 地区 : $ipregion"
+  echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
+  echo "--------------------------------------------------------------"
+  if [[ -x "$SB_BIN" ]]; then
+    echo " [1] 卸载 Sing-Box"
+  else
+    echo " [1] 一键安装 Sing-Box"
+  fi
+  echo " [2] 变更代理配置      (协议 / 端口 / 凭证)"
+  echo " [3] 变更证书配置      (HTTP-01 / DNS-01 / 重签)"
+  echo " [4] 重启 / 查看节点   (reload + 打印节点)"
+  echo " [5] 更新 / 切换内核版本"
+  echo " [6] 更新脚本"
+  echo " [0] 退出"
+  echo "=============================================================="
+  local choice
+  choice=$(core_prompt "请选择 [0-6]")
+  case "$choice" in
+    1)
+      if [[ -x "$SB_BIN" ]]; then sb_uninstall; else sb_install; fi
+      ;;
+    2) config_change || true ;;
+    3) cert_change || true ;;
+    4)
+      if [[ -x "$SB_BIN" ]]; then
+        service_restart; ok "sing-box 已重启"
+      fi
+      node_gen || true
+      ;;
+    5) sb_version_menu || true ;;
+    6) sb_self_update || true ;;
+    0) info "退出"; exit 0 ;;
+    *) warn "无效选择" ;;
+  esac
+}
+
+main_menu() {
+  core_root_check
+  while true; do
+    sb_show_menu || true
+    echo ""
+  done
+}
+
+# 支持 install.sh exec 传入子命令（如 uninstall），否则进入主页面
+# 全局参数：--version X.Y.Z 锁定安装版本
+SB_VERSION_OVERRIDE=""
+if [[ "${1:-}" == "--version" ]]; then
+  SB_VERSION_OVERRIDE="${2:-}"
+  shift 2
+fi
+case "${1:-}" in
+  uninstall) sb_uninstall ;;
+  install)   sb_install ;;
+  nodes)     node_gen ;;
+  *)         main_menu "$@" ;;
+esac
