@@ -82,8 +82,8 @@ core_detect_ip_region() {
   ip=$(curl -s --max-time 6 https://api.ipify.org || true)
   [[ -z "$ip" ]] && { echo "未知 | 未知"; return; }
   geo=$(curl -s --max-time 6 "http://ip-api.com/json/$ip" || true)
-  region=$(printf '%s' "$geo" | grep -o '"country":"[^"]*"'   | head -1 | sed 's/"country":"//;s/"$//')
-  isp=$(printf '%s' "$geo"    | grep -o '"isp":"[^"]*"'       | head -1 | sed 's/"isp":"//;s/"$//')
+  region=$(printf '%s' "$geo" | grep -o '"country":"[^"]*"'   | head -1 | sed 's/"country":"//;s/"$//' || true)
+  isp=$(printf '%s' "$geo"    | grep -o '"isp":"[^"]*"'       | head -1 | sed 's/"isp":"//;s/"$//' || true)
   [[ -z "$region" ]] && region="未知"
   [[ -z "$isp" ]]    && isp="未知"
   echo "$ip | $region / $isp"
@@ -133,15 +133,17 @@ core_rand_port() {
 
 core_rand_pass() {
   local len=${1:-16}
-  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$len"
+  # 注意：head -c 会提前关闭管道导致 tr 收到 SIGPIPE(141)；在 set -o pipefail 下
+  # 整个管道返回非零，会触发 set -e 静默中止。末尾 || true 屏蔽 SIGPIPE。
+  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$len" || true
 }
 
 core_rand_uuid() {
   if command -v uuidgen >/dev/null 2>&1; then
-    uuidgen | tr 'A-Z' 'a-z'
+    uuidgen | tr 'A-Z' 'a-z' || true
   else
-    LC_ALL=C tr -dc '0-9a-f' </dev/urandom | head -c 32 | \
-      sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/'
+    LC_ALL=C tr -dc '0-9a-f' </dev/urandom 2>/dev/null | head -c 32 | \
+      sed 's/\(........\)\(....\)\(....\)\(....\)\(............\)/\1-\2-\3-\4-\5/' || true
   fi
 }
 
