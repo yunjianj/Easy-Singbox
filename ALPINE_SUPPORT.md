@@ -867,20 +867,21 @@ error_log="/var/log/sing-box/sing-box.log"
 
 **方案 B**：安装 `s6` 或 `runit` 作为监督进程（过度复杂，不推荐）
 
-**建议在实现时采用方案 A**，完整 init 脚本如下：
+**建议在实现时采用方案 A**，完整 init 脚本如下（v1.2.6 修正：必须显式 `command_background=true`，否则 OpenRC 以前台方式 exec，`rc-service start` 永久阻塞）：
 
 ```bash
 #!/sbin/openrc-run
 description="sing-box service"
 command="/usr/local/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
+command_background=true
 supervise_daemon_args="--user singbox --group singbox --stdout /var/log/sing-box/sing-box.log --stderr /var/log/sing-box/sing-box.log"
 pidfile="/run/sing-box.pid"
 respawn_delay=5
 respawn_max=0
+rc_ulimit="-n 100000"
 
 depend() {
-  need net
   after firewall
 }
 
@@ -890,6 +891,8 @@ start_pre() {
 }
 ```
 
+- `command_background=true`：**必需**。OpenRC 仅当其为 yes 时才进入后台/supervise-daemon 分支；缺失时以前台 exec 方式运行，`rc-service start` 会一直阻塞到进程退出（实测卡死安装流程）。
+- `depend()` 不写 `need net`：Alpine 无名为 `net` 的服务。
 - `respawn_delay=5`：等价于 `RestartSec=5`
 - `respawn_max=0`：无限重启（等价于 `Restart=always`）
 

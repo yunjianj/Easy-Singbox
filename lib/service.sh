@@ -38,8 +38,11 @@ EOF
 
 # 生成 OpenRC init 脚本（Alpine）
 # 使用 supervise-daemon 实现崩溃自动重启（respawn_max=0 等价 systemd Restart=always）。
-# 注意：不写 need net——Alpine 无名为 net 的服务（networking 才提供虚拟 net），
-# 且多数场景无需显式网络依赖，避免启动流程被依赖解析卡住。
+# 注意：
+# 1. 必须显式 command_background=true——OpenRC 仅当其为 yes 时才进入后台/
+#    supervise-daemon 分支，否则以前台方式 exec，rc-service start 会一直阻塞。
+# 2. 不写 need net——Alpine 无名为 net 的服务（networking 才提供虚拟 net），
+#    避免启动流程被依赖解析卡住。
 service_write_openrc_unit() {
   cat > "$SB_SERVICE" <<'OPENRC_EOF'
 #!/sbin/openrc-run
@@ -49,6 +52,7 @@ service_write_openrc_unit() {
 description="sing-box service"
 command="/usr/local/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
+command_background=true
 supervise_daemon_args="--user singbox --group singbox --stdout /var/log/sing-box/sing-box.log --stderr /var/log/sing-box/sing-box.log"
 pidfile="/run/sing-box.pid"
 respawn_delay=5
