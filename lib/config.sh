@@ -44,7 +44,10 @@ config_gen() {
     printf ',\n'
     proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain"
     printf '\n  ],\n'
-    printf '  "dns": { "servers": [ { "tag": "remote", "type": "https", "server": "1.1.1.1", "detour": "direct" } ], "final": "remote" },\n'
+    # 注意：DoH(https) DNS 服务器不能带 "detour": "direct" —— sing-box 运行期会报
+    # FATAL "detour to an empty direct outbound makes no sense" 直接崩溃（check 却能通过）。
+    # 留空 detour 即走默认出站（此处 route.final=direct），行为一致且不会崩。
+    printf '  "dns": { "servers": [ { "tag": "remote", "type": "https", "server": "1.1.1.1" } ], "final": "remote" },\n'
     printf '  "outbounds": [ { "type": "direct", "tag": "direct" } ],\n'
     printf '  "route": { "final": "direct" }\n'
     printf '}\n'

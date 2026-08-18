@@ -45,7 +45,7 @@
   ],
   "dns": {
     "servers": [
-      { "tag": "remote", "type": "https", "server": "1.1.1.1", "detour": "direct" }
+      { "tag": "remote", "type": "https", "server": "1.1.1.1" }
     ],
     "final": "remote"
   },
