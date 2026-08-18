@@ -71,14 +71,20 @@ OPENRC_EOF
 service_ensure_user() {
   if ! id singbox >/dev/null 2>&1; then
     if [[ "$INIT_SYSTEM" == "openrc" ]]; then
-      # BusyBox adduser: -S=system, -H=no-home, -s=shell, -D=不询问密码
-      adduser -S -H -s /sbin/nologin -D singbox 2>/dev/null || \
-      adduser -S -H -s /sbin/nologin singbox 2>/dev/null || \
-      adduser -S -H singbox 2>/dev/null || true
+      # BusyBox adduser：先确保同名组存在（BusyBox 默认不一定创建 singbox 组，
+      # 缺失会导致后续 chown singbox:singbox 静默失败、敏感文件滞留 root 属主）。
+      addgroup -S singbox 2>/dev/null || true
+      adduser -S -H -s /sbin/nologin -D -G singbox singbox 2>/dev/null || \
+      adduser -S -H -s /sbin/nologin -G singbox singbox 2>/dev/null || \
+      adduser -S -H -G singbox singbox 2>/dev/null || true
     else
       useradd --system --no-create-home --shell /usr/sbin/nologin singbox 2>/dev/null || \
       useradd --system --no-create-home singbox 2>/dev/null || true
     fi
+  fi
+  # 兜底：无论用户是否新建，都确保 singbox 组存在（openrc 下 chown user:group 依赖它）
+  if [[ "$INIT_SYSTEM" == "openrc" ]] && ! getent group singbox >/dev/null 2>&1; then
+    addgroup -S singbox 2>/dev/null || true
   fi
 }
 
@@ -87,16 +93,31 @@ service_ensure_user() {
 # 绝不交给 singbox（进程沦陷时不得泄漏 CF Token 与全部节点凭证）。
 service_grant_conf() {
   id singbox >/dev/null 2>&1 || return 0
-  chown singbox:singbox "$SB_DIR_CONF" 2>/dev/null || true
+  chown singbox:singbox "$SB_DIR_CONF" 2>/dev/null || chown singbox "$SB_DIR_CONF" 2>/dev/null || true
   chmod 755 "$SB_DIR_CONF" 2>/dev/null || true
   for f in "$SB_CONF" "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"; do
-    [[ -f "$f" ]] && chown singbox:singbox "$f" 2>/dev/null || true
+    if [[ -f "$f" ]]; then
+      # 组缺失（BusyBox 常见）时降级为仅设属主，确保 singbox 至少能读
+      chown singbox:singbox "$f" 2>/dev/null || chown singbox "$f" 2>/dev/null || true
+    fi
   done
   # 敏感文件强制回到 root:root 600（修复历史安装中被 chown -R 污染的存量机器）
   for f in "$SB_STATE" "$SB_NODES" "$SB_CF_ENV" "$SB_DIR_CONF/diag.log"; do
     [[ -f "$f" ]] && { chown root:root "$f" 2>/dev/null || true; chmod 600 "$f" 2>/dev/null || true; }
   done
   chmod 755 "$SB_DIR_SSL" 2>/dev/null || true
+
+  # 自检：确认 singbox 确实可读 config.json——否则上述 chown 静默失败会让
+  # 服务启动时报 "open config.json: permission denied"，此处在安装期直接暴露。
+  if [[ -f "$SB_CONF" ]]; then
+    local ok=0
+    if command -v runuser >/dev/null 2>&1 && runuser -u singbox -- test -r "$SB_CONF" 2>/dev/null; then ok=1; fi
+    if [[ $ok -eq 0 ]] && su -s /bin/sh singbox -c "test -r '$SB_CONF'" 2>/dev/null; then ok=1; fi
+    if [[ $ok -eq 0 ]]; then
+      warn "singbox 用户无法读取 $SB_CONF（属主/组或权限异常），服务将启动失败。"
+      warn "请手动执行：chown singbox:singbox $SB_CONF && chmod 600 $SB_CONF"
+    fi
+  fi
 }
 
 # 将配置/证书目录按最小权限模型交给 singbox（保留函数名，调用点无需改动）
