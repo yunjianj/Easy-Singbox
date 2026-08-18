@@ -1,24 +1,16 @@
 #!/usr/bin/env bash
 # sb.sh — 一键引导脚本（可独立运行）
 #   bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
-# 若自身已位于仓库目录（含 install.sh），直接运行；否则下载仓库后运行 install.sh。
+# 设计原则：绝不解析脚本自身路径（bash <(wget ...) 下自身是 /dev/fd/* 伪路径，
+# 无法据此 cd）。改为判断“当前工作目录是否就是仓库”，否则下载后运行。
 set -euo pipefail
 
 REPO="yunjianj/Easy-Singbox"
 BRANCH="main"
-SELF="${BASH_SOURCE[0]:-$0}"
 
-# 通过进程替换/管道运行（如 bash <(wget ...)）时，SELF 为伪路径
-# （/dev/fd/63、/proc/PID/fd/63、/dev/stdin），无法据此定位仓库目录，
-# 直接走下载分支，避免 readlink/cd 解析伪路径失败。
-case "$SELF" in
-  /dev/fd/*|/proc/*|/dev/stdin|-) SELF_DIR="" ;;
-  *) SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd)" || SELF_DIR="" ;;
-esac
-
-# 自身位于真实仓库目录（含 install.sh）：直接运行，避免重复下载
-if [[ -n "$SELF_DIR" && -f "$SELF_DIR/install.sh" ]]; then
-  cd "$SELF_DIR"
+# 若当前目录即为仓库（含 install.sh）：直接运行本地 install.sh，避免重复下载。
+# 通过 bash <(wget ...) 运行时 CWD 为用户家目录，不会命中，会走下方下载分支。
+if [[ -f "./install.sh" ]]; then
   exec bash ./install.sh "$@"
 fi
 
