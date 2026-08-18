@@ -63,7 +63,7 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 
 ## 8. 版本切换与回滚
 
-- [ ] 选项 5 切换到一个其他版本，服务正常
+- [ ] 选项 7 切换到一个其他版本，服务正常
 - [ ] 切换失败时可从 `/usr/local/bin/sing-box.bak` 恢复
 
 ## 9. 卸载

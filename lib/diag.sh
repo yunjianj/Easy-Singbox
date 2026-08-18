@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/diag.sh — 一键诊断（sb debug / 主页面选项 7）
+# lib/diag.sh — 一键诊断（sb debug / 主页面选项 9）
 # 目的：把定位“节点不通”所需的全部信息一次性收集齐，输出到终端并写入文件，
 #       方便用户直接复制/上传给维护者。
 # 约定：全程 best-effort，任何单项失败都不得中断整体（脚本处于 set -euo pipefail 下），
@@ -188,7 +188,7 @@ diag_collect() {
   diag_verdict
 
   _d_sec "诊断结束"
-  echo "如需更详细的运行日志，可执行 sb 选项 7 中的“切换 debug 日志级别”后复现问题再次诊断。"
+  echo "如需更详细的运行日志，可执行 sb 选项 9 中的“切换 debug 日志级别”后复现问题再次诊断。"
 }
 
 # 自动结论：依据服务状态/端口监听/本机与公网自连，给出最可能原因与下一步。
@@ -258,7 +258,7 @@ diag_toggle_log_level() {
   fi
   service_restart 2>/dev/null || true
   ok "日志级别已从 $cur 切换为 $target 并重启服务"
-  info "复现问题后执行 sb → 选项 7 → 生成诊断报告，即可拿到详细日志"
+  info "复现问题后执行 sb → 选项 9 → 生成诊断报告，即可拿到详细日志"
 }
 
 # 诊断子菜单

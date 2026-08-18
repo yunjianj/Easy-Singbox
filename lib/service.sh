@@ -90,7 +90,7 @@ service_verify_ports() {
   if (( bad )); then
     error "存在未监听的端口，客户端会报 connection refused。最近日志："
     journalctl -u sing-box -n 40 --no-pager >&2 || true
-    warn "可执行 sb → 选项 7 生成完整诊断报告"
+    warn "可执行 sb → 选项 9 生成完整诊断报告"
     return 1
   fi
   return 0

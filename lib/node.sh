@@ -11,13 +11,18 @@ node_gen() {
 
   local name="$DOMAIN"
   local anytls_uri="anytls://${PASS_ANYTLS}@${DOMAIN}:${PORT_ANYTLS}?sni=${DOMAIN}&insecure=0#${name}"
-  local hy2_uri="hysteria2://${PASS_HY2}@${DOMAIN}:${PORT_HY2}?alpn=h3&sni=${DOMAIN}&insecure=0#${name}"
+  local hy2_uri="hysteria2://${PASS_HY2}@${DOMAIN}:${PORT_HY2}?alpn=h3&sni=${DOMAIN}&insecure=0"
   if [[ -n "$OBS_HY2" ]]; then
-    hy2_uri="${hy2_uri%#${name}}&obfs=salamander:${OBS_HY2}#${name}"
+    hy2_uri="${hy2_uri}&obfs=salamander:${OBS_HY2}"
   fi
-  # 注意：sing-box 核心 inbound 不支持服务端端口跳跃（无 listen_port 范围、无 hop_ports），
-  # 脚本用 iptables/nftables REDIRECT 做入口重定向，但单监听无法实现客户端 mport 跳变的回包匹配，
-  # 故 URI 不写入 mport（否则客户端跳变必断）。客户端固定连接基础端口 PORT_HY2 即可稳定可用。
+  # Hysteria2 端口跳跃（mport）：sing-box 核心 inbound 不支持服务端端口跳跃（无 listen_port 范围），
+  # 脚本用 nftables/iptables REDIRECT 把整个跳跃段重定向到基础监听端口，回包由 conntrack 自动还原
+  # 源端口，客户端 mport 跳变完全可用（v1.0.7 曾据此移除 mport，实为误判——真正导致节点不通的
+  # 是 DNS detour 崩溃，已于 v1.1.0 修复）。启用跳跃后需在云安全组放行整个 UDP 范围。
+  if [[ -n "$HOP_HY2" ]]; then
+    hy2_uri="${hy2_uri}&mport=${HOP_HY2}"
+  fi
+  hy2_uri="${hy2_uri}#${name}"
   local tuic_uri="tuic://${UUID_TUIC}:${PASS_TUIC}@${DOMAIN}:${PORT_TUIC}?congestion_control=bbr&udp_relay_mode=native&sni=${DOMAIN}&alpn=h3&insecure=0#${name}"
 
   {

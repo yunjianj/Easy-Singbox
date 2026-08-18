@@ -9,7 +9,7 @@ set -euo pipefail
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.1.0"
+SB_SCRIPT_VERSION="1.1.1"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -173,10 +173,9 @@ sb_install() {
 
   # Hysteria2 端口跳跃（增强抗封锁能力，默认段 50001-51000）
   echo "Hysteria2 端口跳跃："
-  echo "  说明：sing-box 核心 inbound 不支持服务端端口跳跃（无 listen_port 范围、无 hop_ports），"
-  echo "  本脚本用 iptables/nftables REDIRECT 把跳跃段重定向到基础监听端口。但单监听无法匹配客户端"
-  echo "  mport 跳变的回包，因此生成的节点 URI 不含 mport，客户端固定连接基础端口即可稳定可用；"
-  echo "  跳跃段仅作入口冗余。若需真正的客户端跳变，需等待核心支持或使用多实例。"
+  echo "  说明：sing-box 核心 inbound 不支持服务端端口跳跃，本脚本用 nftables/iptables REDIRECT"
+  echo "  把跳跃段重定向到基础监听端口，回包由 conntrack 自动还原源端口，客户端 mport 跳变可用。"
+  echo "  启用后节点 URI 将携带 mport=跳跃段，客户端会随机跳变入站端口，抗封锁更强。"
   local enable_hop hop_hy2=""
   enable_hop=$(core_prompt "是否启用 Hysteria2 端口跳跃(REDIRECT 冗余)" "y")
   case "$enable_hop" in
@@ -200,9 +199,10 @@ sb_install() {
   local fwchoice; fwchoice=$(core_prompt "选择" "1")
   fw_apply_choice "$fwchoice" "$port_any" "$port_hy2" "$port_tuic"
   if [[ -n "$hop_hy2" ]]; then
-    warn "已启用 Hysteria2 端口跳跃（$hop_hy2）。本机防火墙已放行基础端口 $port_hy2；" \
-         "若需客户端真正使用跳跃，请在云安全组/上游防火墙额外放行整个 UDP 范围 $hop_hy2，" \
-         "否则客户端只能连基础端口 $port_hy2（仍可正常用，只是不跳）。"
+    warn "已启用 Hysteria2 端口跳跃（$hop_hy2），节点 URI 将携带 mport=$hop_hy2。" \
+         "本地防火墙只需放行基础端口 $port_hy2（跳跃段由 REDIRECT 自动转发）；" \
+         "但客户端会向整个 UDP 范围随机发包，请务必在云安全组/上游防火墙放行 UDP $hop_hy2，" \
+         "否则 Hysteria2 将无法连接（报超时）。"
   fi
 
   # 生成配置
@@ -216,7 +216,7 @@ sb_install() {
   # 端口监听实况校验：服务 active 不代表端口 bind 成功（端口被占用时进程会反复退出），
   # 而客户端 "connection refused" 的直接原因正是此处无监听，故必须显式校验并中止。
   if ! service_verify_ports "$port_any" "$port_hy2" "$port_tuic"; then
-    error "端口未正常监听，安装中止。请执行 sb → 选项 7 生成诊断报告后排查。"
+    error "端口未正常监听，安装中止。请执行 sb → 选项 9 生成诊断报告后排查。"
     return 1
   fi
 
@@ -235,6 +235,9 @@ sb_install() {
   fi
 
   # 软链管理命令（失败不中断安装，sb 仍可通过绝对路径运行）
+  # 必须先确保 sb 本体可执行：GitHub tarball 会保留执行位，但自更新时 curl 下载的
+  # 文件是 0644，若复制成新文件会丢 +x，导致 "bash: /usr/local/bin/sb: Permission denied"。
+  chmod 755 "$SB_DIR/sb" 2>/dev/null || true
   ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
   ok "管理命令已链接: $SB_SYMLINK -> $SB_DIR/sb"
 
@@ -268,7 +271,7 @@ sb_uninstall() {
   ok "卸载完成"
 }
 
-# ---------- 版本切换（选项 5）----------
+# ---------- 版本切换（选项 7）----------
 sb_version_menu() {
   core_root_check
   [[ -x "$SB_BIN" ]] || { error "尚未安装 sing-box"; return 1; }
@@ -290,7 +293,7 @@ sb_version_menu() {
   fi
 }
 
-# ---------- 自更新（选项 6）----------
+# ---------- 自更新（选项 8）----------
 sb_self_update() {
   core_root_check
   if [[ -z "$SB_UPDATE_BASE" ]]; then
@@ -355,7 +358,7 @@ sb_show_menu() {
   echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
   case "$vstat" in
     latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
-    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_RED}[发现新版本 v${nv}，可执行选项 6 更新]${C_RST}" ;;
+    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_RED}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
     *)        echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_YEL}[远程版本未知，请检查网络]${C_RST}" ;;
   esac
   echo "--------------------------------------------------------------"
@@ -366,14 +369,16 @@ sb_show_menu() {
   fi
   echo " [2] 变更代理配置      (协议 / 端口 / 凭证)"
   echo " [3] 变更证书配置      (HTTP-01 / DNS-01 / 重签)"
-  echo " [4] 重启 / 查看节点   (reload + 打印节点)"
-  echo " [5] 更新 / 切换内核版本"
-  echo " [6] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
-  echo " [7] 诊断与日志        (排查节点不通，生成可发送的报告)"
+  echo " [4] 启动 Sing-Box"
+  echo " [5] 停止 Sing-Box"
+  echo " [6] 重启 / 查看节点   (reload + 打印节点)"
+  echo " [7] 更新 / 切换内核版本"
+  echo " [8] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
+  echo " [9] 诊断与日志        (排查节点不通，生成可发送的报告)"
   echo " [0] 退出"
   echo "=============================================================="
   local choice
-  choice=$(core_prompt "请选择 [0-7]")
+  choice=$(core_prompt "请选择 [0-9]")
   case "$choice" in
     1)
       if [[ -x "$SB_BIN" ]]; then sb_uninstall; else sb_install; fi
@@ -382,13 +387,27 @@ sb_show_menu() {
     3) cert_change || true ;;
     4)
       if [[ -x "$SB_BIN" ]]; then
+        service_start || true
+      else
+        error "尚未安装 sing-box，请先执行选项 1 安装"
+      fi
+      ;;
+    5)
+      if [[ -x "$SB_BIN" ]]; then
+        service_stop; ok "sing-box 已停止"
+      else
+        error "尚未安装 sing-box"
+      fi
+      ;;
+    6)
+      if [[ -x "$SB_BIN" ]]; then
         service_restart; ok "sing-box 已重启"
       fi
       node_gen || true
       ;;
-    5) sb_version_menu || true ;;
-    6) sb_self_update || true ;;
-    7) diag_menu || true ;;
+    7) sb_version_menu || true ;;
+    8) sb_self_update || true ;;
+    9) diag_menu || true ;;
     0) info "退出"; exit 0 ;;
     *) warn "无效选择" ;;
   esac
