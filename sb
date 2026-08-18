@@ -8,8 +8,14 @@ set -euo pipefail
 # 解析脚本真实目录（兼容软链）
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# 自更新源（留空则禁用；发布后可在此填写 raw 仓库地址）
-SB_UPDATE_BASE="${SB_UPDATE_BASE:-}"
+# 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
+SB_SCRIPT_VERSION="1.0.0"
+
+# 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
+SB_VER_CACHE="$SB_DIR/.script_ver"
+
+# 自更新源（默认 jsDelivr 实时同步仓库；如改用 raw 可改此值）
+SB_UPDATE_BASE="${SB_UPDATE_BASE:-https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main}"
 
 # ---------- 载入模块 ----------
 source "$SB_DIR/lib/core.sh"
@@ -53,6 +59,39 @@ sb_download() {
   install -m 755 "$bin" "$SB_BIN"
   rm -rf "$tmp"
   ok "sing-box v${version} 已安装到 $SB_BIN"
+}
+
+# ---------- 脚本自身版本检测 ----------
+# 读取仓库根 VERSION 文件（jsDelivr 实时同步，比 raw 缓存快）；失败返回空。
+# 末尾 || true 屏蔽 SIGPIPE，避免 set -o pipefail 下整条管道非零触发 set -e 静默中止。
+sb_script_latest() {
+  local r
+  r=$(curl -s --max-time 6 "https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/VERSION" 2>/dev/null \
+    | tr -d '[:space:]v' || true)
+  # 仅接受语义版本（数字.数字.数字，允许 v 前缀）；拒绝 HTML/错误文本，避免误报
+  [[ "$r" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$r" || true
+}
+
+# 带本地缓存的版本状态：缓存只存“干净的远程版本号”，10 分钟内复用；
+# 非法值（错误页/HTML）绝不写入缓存，避免污染。检测失败返回 unknown。
+sb_script_version_status() {
+  local cur=$1 now cached_ts cached_ver r="" newer
+  now=$(date +%s) || now=0
+  if [[ -f "$SB_VER_CACHE" ]]; then
+    IFS='|' read -r cached_ver cached_ts < "$SB_VER_CACHE" 2>/dev/null || true
+    if [[ -n "$cached_ts" && -n "$cached_ver" && "$cached_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+          && $((now - cached_ts)) -lt 600 ]]; then
+      r="$cached_ver"
+    fi
+  fi
+  if [[ -z "$r" ]]; then
+    r=$(sb_script_latest) || true
+    [[ -n "$r" ]] && echo "${r}|${now}" > "$SB_VER_CACHE" 2>/dev/null || true
+  fi
+  [[ -z "$r" ]] && { echo "unknown"; return; }
+  [[ "$cur" == "$r" ]] && { echo "latest"; return; }
+  newer=$(printf '%s\n%s\n' "$cur" "$r" | sort -V | tail -1) || true
+  if [[ "$newer" == "$cur" ]]; then echo "latest"; else echo "update:$r"; fi
 }
 
 # ---------- 安装主流程 ----------
@@ -193,7 +232,7 @@ sb_self_update() {
   info "从 $SB_UPDATE_BASE 更新脚本（保留 /etc/sing-box 配置与证书）..."
   local tmp; tmp=$(mktemp -d)
   local ok=1
-  for f in install.sh sb uninstall.sh lib/core.sh lib/service.sh lib/firewall.sh lib/cert.sh lib/config.sh lib/node.sh lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
+  for f in install.sh sb uninstall.sh VERSION lib/core.sh lib/service.sh lib/firewall.sh lib/cert.sh lib/config.sh lib/node.sh lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
     if ! curl -sL --max-time 60 -o "$tmp/$(basename "$f")" "$SB_UPDATE_BASE/$f"; then ok=0; break; fi
   done
   if [[ $ok -eq 1 ]]; then
@@ -209,6 +248,8 @@ sb_self_update() {
 
 # ---------- 主页面 ----------
 sb_show_menu() {
+  local vstat
+  vstat=$(sb_script_version_status "$SB_SCRIPT_VERSION") || true
   clear 2>/dev/null || true
   local os arch virt bbr ipregion status inst running ver proto
   os=$(core_detect_os)
@@ -223,7 +264,7 @@ sb_show_menu() {
   IFS='|' read -r inst running ver proto <<< "$(core_sb_status)"
 
   echo "=============================================================="
-  echo -e "      ${C_BOLD}easy-singbox  管理面板${C_RST}"
+  echo -e "      ${C_BOLD}easy-singbox  管理面板${C_RST}  ${C_BOLD}v${SB_SCRIPT_VERSION}${C_RST}"
   echo "--------------------------------------------------------------"
   echo " 系统      : $os"
   echo " 指令集    : $arch_disp"
@@ -231,6 +272,11 @@ sb_show_menu() {
   echo " BBR       : $bbr"
   echo " IP / 地区 : $ipregion"
   echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
+  case "$vstat" in
+    latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
+    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_RED}[发现新版本 v${nv}，可执行选项 6 更新]${C_RST}" ;;
+    *)        echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_YEL}[远程版本未知，请检查网络]${C_RST}" ;;
+  esac
   echo "--------------------------------------------------------------"
   if [[ -x "$SB_BIN" ]]; then
     echo " [1] 卸载 Sing-Box"
@@ -241,7 +287,7 @@ sb_show_menu() {
   echo " [3] 变更证书配置      (HTTP-01 / DNS-01 / 重签)"
   echo " [4] 重启 / 查看节点   (reload + 打印节点)"
   echo " [5] 更新 / 切换内核版本"
-  echo " [6] 更新脚本"
+  echo " [6] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
   echo " [0] 退出"
   echo "=============================================================="
   local choice
