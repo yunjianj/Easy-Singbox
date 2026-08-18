@@ -65,6 +65,8 @@ if [[ $EUID -eq 0 ]]; then
   rm -rf "$DEST/lib" "$DEST/templates"
   cp -rf "$DIR/." "$DEST/"
   chmod 755 "$DEST/sb" "$DEST/install.sh" "$DEST/uninstall.sh" 2>/dev/null || true
+  # 立即建立管理命令软链：即使后续 install.sh 中途失败/卡住，sb 也可用于排查
+  ln -sf "$DEST/sb" /usr/local/bin/sb 2>/dev/null || true
   cd "$DEST"
   exec bash ./install.sh "$@"
 fi

@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.7"
+SB_SCRIPT_VERSION="1.2.8"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -160,6 +160,9 @@ sb_install() {
 
   # 提前创建低权限用户，保证后续生成的配置/证书可被读取
   service_ensure_user
+  # 立即建立管理命令软链：即使后续步骤（证书/服务启动）失败或卡住，sb 也始终可用
+  chmod 755 "$SB_DIR/sb" 2>/dev/null || true
+  ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
   # 确保 IPv6 双栈监听（listen "::" 在 bindv6only=1 时仅监听 IPv6，致 IPv4 被 RST）
   core_ensure_dualstack
 
