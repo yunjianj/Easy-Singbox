@@ -38,13 +38,13 @@ config_gen() {
     printf ',\n'
     proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain"
     printf '\n  ],\n'
-    printf '  "dns": { "servers": [ { "tag": "remote", "address": "https://1.1.1.1/dns-query", "detour": "direct" } ], "final": "remote" },\n'
+    printf '  "dns": { "servers": [ { "tag": "remote", "type": "https", "server": "1.1.1.1", "detour": "direct" } ], "final": "remote" },\n'
     printf '  "outbounds": [ { "type": "direct", "tag": "direct" } ],\n'
     printf '  "route": { "final": "direct" }\n'
     printf '}\n'
   } > "$SB_CONF"
 
-  chmod 600 "$SB_CONF"; chown root:root "$SB_CONF"
+  chmod 600 "$SB_CONF"; chown root:root "$SB_CONF" 2>/dev/null || true
 
   # 状态文件（节点 URI 生成依赖，权限 600）
   cat > "$SB_STATE" <<EOF
@@ -59,7 +59,7 @@ UUID_TUIC=$uuid_tuic
 OBS_HY2=$obfs_hy2
 HOP_HY2=$hop_hy2
 EOF
-  chmod 600 "$SB_STATE"; chown root:root "$SB_STATE"
+  chmod 600 "$SB_STATE"; chown root:root "$SB_STATE" 2>/dev/null || true
 
   # 校验配置
   if ! "$SB_BIN" check -c "$SB_CONF"; then

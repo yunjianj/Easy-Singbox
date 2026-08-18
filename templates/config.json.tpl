@@ -44,7 +44,9 @@
     }
   ],
   "dns": {
-    "servers": [ { "tag": "remote", "address": "https://1.1.1.1/dns-query", "detour": "direct" } ],
+    "servers": [
+      { "tag": "remote", "type": "https", "server": "1.1.1.1", "detour": "direct" }
+    ],
     "final": "remote"
   },
   "outbounds": [ { "type": "direct", "tag": "direct" } ],
