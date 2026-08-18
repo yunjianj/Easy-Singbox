@@ -33,7 +33,7 @@ sb_latest_version() {
   local tag
   tag=$(curl -s --max-time 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest \
     | tr ',' '\n' | grep '"tag_name"' | head -1 \
-    | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/')
+    | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' || true)
   tag=${tag#v}
   [[ -z "$tag" ]] && return 1
   echo "$tag"
@@ -131,6 +131,7 @@ sb_install() {
     cert_issue_http01 "$domain" || return 1
   fi
 
+  info "证书就绪，正在生成随机端口与凭证（如长时间无输出请检查终端）..."
   # 端口 + 凭证（默认随机，可后续在选项 2 修改）
   local port_any port_hy2 port_tuic pass_any pass_hy2 pass_tuic uuid
   local hop_hy2=""
@@ -168,8 +169,8 @@ sb_install() {
   service_install
   service_start
 
-  # 软链管理命令
-  ln -sf "$SB_DIR/sb" "$SB_SYMLINK"
+  # 软链管理命令（失败不中断安装，sb 仍可通过绝对路径运行）
+  ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
   ok "管理命令已链接: $SB_SYMLINK -> $SB_DIR/sb"
 
   # 节点输出

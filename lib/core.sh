@@ -115,9 +115,9 @@ PORT_HOP_HI=51000
 
 core_rand_port() {
   # 注：span 必须在 lo/hi 赋值后再计算，避免 bash 同条 local 内 RHS 提前展开导致 span 异常
-  local lo=49152 hi=65535 span p
+  local lo=49152 hi=65535 span p tries=0
   span=$((hi - lo + 1))
-  while true; do
+  while (( ++tries <= 200 )); do
     p=$((RANDOM % span + lo))
     (( p >= PORT_HOP_LO && p <= PORT_HOP_HI )) && continue
     if command -v ss >/dev/null 2>&1; then
@@ -129,6 +129,9 @@ core_rand_port() {
       echo "$p"; return
     fi
   done
+  # 兜底：SS 探测异常（如始终误报占用）时，直接返回一个高位随机端口，避免死循环卡死
+  p=$((RANDOM % span + lo))
+  echo "$p"
 }
 
 core_rand_pass() {
