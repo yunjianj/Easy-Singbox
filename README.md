@@ -153,7 +153,7 @@ sb log        # 直接查看最近 200 行服务日志
 
 **供应链完整性（v1.1.2）**
 
-- **sing-box 二进制**：每次下载（安装/切换内核版本）都会比对 **GitHub Release API 官方 asset digest（sha256）**——实测 sing-box 官方不附带 checksums 文件，但 API 为每个资产提供 `digest` 字段，作为权威校验锚点；校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件。缺失 `sha256sum`/`shasum` 或 API 与 checksums 均不可用时显著警告并要求显式确认，绝不静默跳过。
+- **sing-box 二进制**：每次下载（安装/切换内核版本）都会比对 **GitHub Release API 官方 asset digest（sha256）**——GitHub 为每个资产签发的 digest 无法伪造，比"与二进制同 release 的 checksums 文件"更强（sing-box 官方也未附带该文件）。校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件；API 不可用或缺失 `sha256sum`/`shasum` 时显著警告并要求显式确认，绝不静默跳过。
 - **脚本自更新**：更新源固定为 GitHub raw 官方域名（`SB_UPDATE_BASE`），覆盖本地前列出变更文件并要求确认；拒绝则本地不被改动。
 - **acme.sh 安装**：不再 `curl | sh` 盲执行，改为 git clone 官方仓库或下载官方 master 单文件，先落盘、校验非空与 shebang，再本地执行；兜底 `get.acme.sh` 同样先落盘校验并要求确认。
 - **引导脚本 sb.sh**：解压后校验 `install.sh` shebang 及 `sb`/`lib/*.sh` 齐套，不完整即中止。

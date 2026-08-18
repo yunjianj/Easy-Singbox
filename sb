@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.2"
+SB_SCRIPT_VERSION="1.2.3"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -49,7 +49,6 @@ sb_download() {
   local version=$1 arch=$2
   [[ -z "$version" || -z "$arch" ]] && { error "下载参数缺失（version/arch 为空）"; return 1; }
   local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
-  local chk_url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-checksums.sha256"
   local tmp; tmp=$(mktemp -d)
   info "下载 sing-box v${version} (${arch}) ..."
   local http_code
@@ -61,10 +60,11 @@ sb_download() {
     error "下载文件不是有效的 gzip 压缩包（可能下载到了错误页面）: $url"; rm -rf "$tmp"; return 1
   fi
 
-  # 供应链完整性校验（v1.2.2 修正）：
-  # 实测 sing-box 官方 release 并不附带 checksums.sha256（SECURITY_FIXES.md 前提有误），
-  # 但 GitHub Release API 为每个资产提供官方 digest（sha256:<hex>），作为首选校验锚点。
-  # 校验顺序：GitHub API digest → 发行方 checksums.sha256（若存在）→ 均不可用时警告并要求确认。
+  # 供应链完整性校验（v1.2.3 简化）：
+  # sing-box 官方 release 不附带 checksums.sha256，且 GitHub 的 asset digest 由 GitHub
+  # 服务端签发、攻击者无法伪造，比"与二进制同 release 的 checksums 文件"更强，故不再
+  # 保留 checksums 备选。校验锚点统一为 GitHub Release API digest；API 不可用或缺少
+  # sha256sum/shasum 时显著警告并要求用户确认，绝不静默跳过。
   local sum_tool=""
   if command -v sha256sum >/dev/null 2>&1; then
     sum_tool="sha256sum"
@@ -74,7 +74,6 @@ sb_download() {
 
   local verified=0
   if [[ -n "$sum_tool" ]]; then
-    # 首选：GitHub Release API 官方 digest（HTTPS 直连 api.github.com）
     local api_digest actual
     api_digest=$(curl -fsSL --retry 2 --max-time 20 "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}" 2>/dev/null \
       | awk -v want="sing-box-${version}-linux-${arch}.tar.gz" '
@@ -93,32 +92,10 @@ sb_download() {
         rm -rf "$tmp"; return 1
       fi
     fi
-
-    # 备选：发行方附带的 checksums.sha256（sing-box 暂无，保留对其它发行方的兼容）
-    if [[ $verified -eq 0 ]]; then
-      local expect
-      if curl -fsSL --retry 2 --max-time 60 -o "$tmp/checksums.sha256" "$chk_url"; then
-        expect=$(grep -F "sing-box-${version}-linux-${arch}.tar.gz" "$tmp/checksums.sha256" 2>/dev/null | awk '{print $1}' | head -1 || true)
-        if [[ -z "$expect" ]]; then
-          error "checksums 文件缺少 $arch 对应哈希条目，已拒绝安装"
-          rm -rf "$tmp"; return 1
-        fi
-        actual=$($sum_tool "$tmp/sb.tar.gz" 2>/dev/null | awk '{print $1}' || true)
-        if [[ "$expect" == "$actual" ]]; then
-          ok "checksums.sha256 校验通过"
-          verified=1
-        else
-          error "sing-box 二进制校验失败，已拒绝安装"
-          info "期望 SHA256: $expect"
-          info "实际 SHA256: ${actual:-无法计算}"
-          rm -rf "$tmp"; return 1
-        fi
-      fi
-    fi
   fi
 
   if [[ $verified -eq 0 ]]; then
-    warn "无法获取官方校验值（缺少 sha256sum/shasum，或 GitHub API 与 checksums 均不可用）"
+    warn "无法获取官方校验值（缺少 sha256sum/shasum，或 GitHub API 不可用）"
     if ! core_prompt_yn "确认在无完整性校验的情况下继续安装？"; then
       warn "已取消安装"; rm -rf "$tmp"; return 1
     fi
