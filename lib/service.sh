@@ -19,7 +19,12 @@ LimitNOFILE=100000
 # 降权运行：以非 root 用户运行（端口均为高位随机，无需 CAP_NET_BIND_SERVICE）
 User=singbox
 Group=singbox
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+# 最小加固（纯收紧，不改变运行行为）：sing-box 不写本地路径，日志走 stdout/journald
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/sing-box
+ProtectHome=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
@@ -32,14 +37,28 @@ service_ensure_user() {
     useradd --system --no-create-home --shell /usr/sbin/nologin singbox 2>/dev/null || \
     useradd --system --no-create-home singbox 2>/dev/null || true
   fi
-  # 让 singbox 可读证书/配置目录
-  chown -R singbox:singbox "$SB_DIR_CONF" 2>/dev/null || true
 }
 
-# 将配置/证书目录交给 singbox 低权限用户读取（用户不存在时静默跳过）
-service_chown_conf() {
+# 服务运行用户精确授权：仅 config.json 与证书两文件交给 singbox；
+# .cf.env / .state / nodes.txt / diag.log 必须保持 root:root 600，
+# 绝不交给 singbox（进程沦陷时不得泄漏 CF Token 与全部节点凭证）。
+service_grant_conf() {
   id singbox >/dev/null 2>&1 || return 0
-  chown -R singbox:singbox "$SB_DIR_CONF" 2>/dev/null || true
+  chown singbox:singbox "$SB_DIR_CONF" 2>/dev/null || true
+  chmod 755 "$SB_DIR_CONF" 2>/dev/null || true
+  for f in "$SB_CONF" "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"; do
+    [[ -f "$f" ]] && chown singbox:singbox "$f" 2>/dev/null || true
+  done
+  # 敏感文件强制回到 root:root 600（修复历史安装中被 chown -R 污染的存量机器）
+  for f in "$SB_STATE" "$SB_NODES" "$SB_CF_ENV" "$SB_DIR_CONF/diag.log"; do
+    [[ -f "$f" ]] && { chown root:root "$f" 2>/dev/null || true; chmod 600 "$f" 2>/dev/null || true; }
+  done
+  chmod 755 "$SB_DIR_SSL" 2>/dev/null || true
+}
+
+# 将配置/证书目录按最小权限模型交给 singbox（保留函数名，调用点无需改动）
+service_chown_conf() {
+  service_grant_conf
 }
 
 service_install() {

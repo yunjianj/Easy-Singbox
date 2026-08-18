@@ -37,6 +37,22 @@ if [[ -z "$DIR" || ! -f "$DIR/install.sh" ]]; then
   exit 1
 fi
 
+# 引导期完整性校验（引导时本地无信任锚，做最低限度齐套检查）：
+# install.sh 首行需为 sh shebang；sb 与全部 lib/*.sh 必须齐全，否则拒绝执行。
+if ! head -1 "$DIR/install.sh" | grep -qE '^#!.*sh'; then
+  echo "解压内容异常：install.sh 缺少 shebang，已中止（疑似下载被篡改）" >&2
+  exit 1
+fi
+for _f in "$DIR/sb" "$DIR/uninstall.sh" "$DIR/lib/core.sh" "$DIR/lib/service.sh" \
+          "$DIR/lib/firewall.sh" "$DIR/lib/port_hop.sh" "$DIR/lib/cert.sh" \
+          "$DIR/lib/config.sh" "$DIR/lib/node.sh" "$DIR/lib/diag.sh" \
+          "$DIR/lib/protocol/anytls.sh" "$DIR/lib/protocol/hysteria2.sh" "$DIR/lib/protocol/tuic.sh"; do
+  if [[ ! -f "$_f" ]]; then
+    echo "解压内容不完整：缺少 $_f，已中止（疑似下载被篡改）" >&2
+    exit 1
+  fi
+done
+
 # 安装到持久目录后再运行。
 # 原因：此前直接在 mktemp 临时目录里 exec install.sh，导致 /usr/local/bin/sb 软链
 # 指向临时目录；/tmp 被清理或重启后 sb 失效，且残留的旧 lib 模块会与新版 sb 混用，

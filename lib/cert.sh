@@ -3,14 +3,52 @@
 # 仅支持脚本自动申请，不支持手动上传。HTTP-01 / DNS-01(Cloudflare)。
 
 # 安装 acme.sh（幂等）
+# 供应链防护：不再 `curl ... | sh` 盲执行远程脚本，改为“先落盘、再校验、后执行”。
+# 校验项：文件非空 + 首行 sh shebang。优先 git clone 官方仓库，其次下载官方 master
+# 单文件本地执行，最后才退回 get.acme.sh（此时要求用户显式确认）。
 cert_install_acme() {
   if [[ -x "$ACME_HOME/acme.sh" ]]; then
     ok "acme.sh 已安装 ($ACME_HOME/acme.sh)"
     return 0
   fi
   info "正在安装 acme.sh ..."
-  curl -sL https://get.acme.sh | sh
-  if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
+  local tmp; tmp=$(mktemp -d)
+  local installed=0
+
+  # 方式一（首选）：git clone 官方仓库到本地后再安装
+  if command -v git >/dev/null 2>&1; then
+    if git clone --depth 1 https://github.com/acmesh-official/acme.sh.git "$tmp/acme.sh-src" >/dev/null 2>&1 \
+       && [[ -s "$tmp/acme.sh-src/acme.sh" ]] \
+       && head -1 "$tmp/acme.sh-src/acme.sh" | grep -qE '^#!.*sh'; then
+      (cd "$tmp/acme.sh-src" && ./acme.sh --install >/dev/null 2>&1) && installed=1
+    fi
+  fi
+
+  # 方式二：下载官方 master 单文件，落盘校验后本地执行（acme.sh 支持自安装）
+  if [[ $installed -eq 0 ]]; then
+    if curl -fsSL --retry 3 --max-time 60 -o "$tmp/acme.sh" \
+           "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" \
+       && [[ -s "$tmp/acme.sh" ]] \
+       && head -1 "$tmp/acme.sh" | grep -qE '^#!.*sh'; then
+      chmod +x "$tmp/acme.sh"
+      "$tmp/acme.sh" --install >/dev/null 2>&1 && installed=1
+    fi
+  fi
+
+  # 方式三（兜底）：get.acme.sh 安装脚本，同样先落盘校验，并要求用户确认
+  if [[ $installed -eq 0 ]]; then
+    warn "官方仓库/文件下载失败，改用 get.acme.sh 安装脚本（已先落盘校验，非管道直执行）"
+    if core_prompt_yn "确认继续安装 acme.sh？"; then
+      if curl -fsSL --retry 3 --max-time 60 -o "$tmp/acme-install.sh" "https://get.acme.sh" \
+         && [[ -s "$tmp/acme-install.sh" ]] \
+         && head -1 "$tmp/acme-install.sh" | grep -qE '^#!.*sh'; then
+        bash "$tmp/acme-install.sh" >/dev/null 2>&1 && installed=1
+      fi
+    fi
+  fi
+
+  rm -rf "$tmp"
+  if [[ $installed -eq 0 ]]; then
     error "acme.sh 安装失败，请检查网络后重试"
     return 1
   fi
@@ -29,8 +67,8 @@ cert_install_files() {
     --reloadcmd "systemctl is-enabled sing-box >/dev/null 2>&1 && systemctl reload sing-box || true" --ecc
   chown root:root "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"
   chmod 600 "$SB_DIR_SSL/fullchain.pem" "$SB_DIR_SSL/privkey.pem"
-  # 证书/配置目录交给 singbox 用户读取（降权运行）
-  chown -R singbox:singbox "$SB_DIR_CONF" 2>/dev/null || true
+  # 精确授权：仅把 config.json 与证书两文件交给 singbox，敏感文件保持 root:root 600
+  service_grant_conf
 }
 
 # HTTP-01 签发（standalone 需要 80 空闲）

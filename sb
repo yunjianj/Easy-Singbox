@@ -4,18 +4,21 @@
 # 两者都进入同一主页面。
 
 set -euo pipefail
+# 敏感文件（.state/.cf.env/nodes.txt 等）一律按 600 创建，避免默认 umask 022
+# 在写入与 chmod 之间的窗口短暂暴露为 644。
+umask 077
 
 # 解析脚本真实目录（兼容软链）
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.1.1"
+SB_SCRIPT_VERSION="1.1.2"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
 
-# 自更新源（默认 jsDelivr 实时同步仓库；如改用 raw 可改此值）
-SB_UPDATE_BASE="${SB_UPDATE_BASE:-https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main}"
+# 自更新源（默认 GitHub raw 官方域名，避免第三方 CDN 缓存被投毒；可用环境变量覆盖）
+SB_UPDATE_BASE="${SB_UPDATE_BASE:-https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main}"
 
 # ---------- 载入模块 ----------
 source "$SB_DIR/lib/core.sh"
@@ -45,6 +48,7 @@ sb_download() {
   local version=$1 arch=$2
   [[ -z "$version" || -z "$arch" ]] && { error "下载参数缺失（version/arch 为空）"; return 1; }
   local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
+  local chk_url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-checksums.sha256"
   local tmp; tmp=$(mktemp -d)
   info "下载 sing-box v${version} (${arch}) ..."
   local http_code
@@ -55,6 +59,46 @@ sb_download() {
   if ! gzip -t "$tmp/sb.tar.gz" 2>/dev/null; then
     error "下载文件不是有效的 gzip 压缩包（可能下载到了错误页面）: $url"; rm -rf "$tmp"; return 1
   fi
+
+  # 供应链完整性校验：下载官方 checksums.sha256 并比对（防止仓库被入侵/下载被劫持后
+  # 植入恶意二进制）。缺失 sha256sum 工具时必须显著警告并要求用户确认，绝不静默跳过。
+  if command -v sha256sum >/dev/null 2>&1; then
+    local sum_tool="sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    local sum_tool="shasum -a 256"
+  else
+    local sum_tool=""
+  fi
+
+  if [[ -n "$sum_tool" ]]; then
+    if ! curl -fsSL --retry 3 --max-time 60 -o "$tmp/checksums.sha256" "$chk_url"; then
+      error "无法下载校验文件 $chk_url"
+      warn "为安全起见中止安装。可手动下载并校验后重试，或检查网络。"
+      rm -rf "$tmp"; return 1
+    fi
+    # checksums 格式：每行 "<hash>  sing-box-<version>-linux-<arch>.tar.gz"
+    # 下载文件已改名 sb.tar.gz，无法直接用 sha256sum -c，改为比对期望哈希与实算值。
+    local expect actual
+    expect=$(grep -F "sing-box-${version}-linux-${arch}.tar.gz" "$tmp/checksums.sha256" 2>/dev/null | awk '{print $1}' | head -1 || true)
+    if [[ -z "$expect" ]]; then
+      error "checksums 文件中未找到 $arch 对应哈希条目，已拒绝安装"
+      rm -rf "$tmp"; return 1
+    fi
+    actual=$($sum_tool "$tmp/sb.tar.gz" 2>/dev/null | awk '{print $1}' || true)
+    if [[ "$expect" != "$actual" ]]; then
+      error "sing-box 二进制校验失败，已拒绝安装（供应链安全风险）"
+      info  "期望 SHA256: $expect"
+      info  "实际 SHA256: ${actual:-无法计算}"
+      rm -rf "$tmp"; return 1
+    fi
+    ok "sha256 校验通过（$sum_tool）"
+  else
+    warn "系统无 sha256sum/shasum，无法校验 sing-box 二进制完整性（供应链安全风险）"
+    if ! core_prompt_yn "确认在无完整性校验的情况下继续安装？"; then
+      warn "已取消安装"; rm -rf "$tmp"; return 1
+    fi
+  fi
+
   tar -xzf "$tmp/sb.tar.gz" -C "$tmp"
   local bin; bin=$(find "$tmp" -name sing-box -type f | head -1)
   if [[ -z "$bin" ]]; then error "压缩包内未找到 sing-box 二进制"; rm -rf "$tmp"; return 1; fi
@@ -64,11 +108,11 @@ sb_download() {
 }
 
 # ---------- 脚本自身版本检测 ----------
-# 读取仓库根 VERSION 文件（jsDelivr 实时同步，比 raw 缓存快）；失败返回空。
+# 读取仓库根 VERSION 文件（GitHub raw 官方域名，避免第三方 CDN 缓存被投毒）；失败返回空。
 # 末尾 || true 屏蔽 SIGPIPE，避免 set -o pipefail 下整条管道非零触发 set -e 静默中止。
 sb_script_latest() {
   local r
-  r=$(curl -s --max-time 6 "https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/VERSION" 2>/dev/null \
+  r=$(curl -s --max-time 6 "https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/VERSION" 2>/dev/null \
     | tr -d '[:space:]v' || true)
   # 仅接受语义版本（数字.数字.数字，允许 v 前缀）；拒绝 HTML/错误文本，避免误报
   [[ "$r" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$r" || true
@@ -320,6 +364,28 @@ sb_self_update() {
     fi
   done
   if [[ $upd_ok -eq 1 ]]; then
+    # 覆盖本地前先展示变更摘要并要求确认：列出所有与本地不同的文件，
+    # 确认前绝不写 $SB_DIR（供应链防护：即便更新源被投毒，用户仍可拒绝）。
+    local changed=() diffcnt=0
+    for f in install.sh sb uninstall.sh VERSION \
+             lib/core.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
+             lib/config.sh lib/node.sh lib/diag.sh \
+             lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
+             templates/config.json.tpl; do
+      if [[ ! -f "$SB_DIR/$f" ]] || ! cmp -s "$tmp/$f" "$SB_DIR/$f"; then
+        changed+=("$f"); diffcnt=$((diffcnt+1))
+      fi
+    done
+    if (( diffcnt == 0 )); then
+      info "已是最新版本，无文件变更（本地与远程一致）"
+      rm -rf "$tmp"; return 0
+    fi
+    info "以下 $diffcnt 个文件有变更，将覆盖本地版本："
+    printf '  - %s\n' "${changed[@]}"
+    if ! core_prompt_yn "确认覆盖本地文件并更新脚本？"; then
+      warn "已取消更新，本地文件未被改动"
+      rm -rf "$tmp"; return 0
+    fi
     cp -rf "$tmp/." "$SB_DIR/" 2>/dev/null || true
     chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh" 2>/dev/null || true
     ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true

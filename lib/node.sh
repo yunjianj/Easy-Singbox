@@ -48,8 +48,9 @@ node_gen() {
   "tls": { "enabled": true, "server_name": "$DOMAIN", "insecure": false }
 }
 JSON
-  } | tee "$SB_NODES" >/dev/null
+  } > "$SB_NODES"
 
+  # umask 077 下重定向创建即为 600，保险起见显式收紧
   chmod 600 "$SB_NODES"; chown root:root "$SB_NODES"
 
   # 终端展示
