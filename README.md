@@ -42,7 +42,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 
 脚本仅依赖 `curl` + `bash` + 常见 coreutils。其余工具在安装时自动安装：
 
-- `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13，下载后强制比对官方 `checksums.sha256`，校验失败即拒绝安装）
+- `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13，下载后比对 GitHub Release API 官方 digest（sha256），校验失败即拒绝安装）
 - `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
 - `qrencode`（二维码，缺失时仅跳过二维码不中断）
 - `ncurses`（可选，提供 `tput` 彩色输出；缺失时静默降级为无色，不影响功能。Alpine 上安装：`apk add ncurses`）
@@ -153,7 +153,7 @@ sb log        # 直接查看最近 200 行服务日志
 
 **供应链完整性（v1.1.2）**
 
-- **sing-box 二进制**：每次下载（安装/切换内核版本）都会同时下载官方 `checksums.sha256` 并比对，校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件；系统缺失 `sha256sum`/`shasum` 时显著警告并要求显式确认，绝不静默跳过。
+- **sing-box 二进制**：每次下载（安装/切换内核版本）都会比对 **GitHub Release API 官方 asset digest（sha256）**——实测 sing-box 官方不附带 checksums 文件，但 API 为每个资产提供 `digest` 字段，作为权威校验锚点；校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件。缺失 `sha256sum`/`shasum` 或 API 与 checksums 均不可用时显著警告并要求显式确认，绝不静默跳过。
 - **脚本自更新**：更新源固定为 GitHub raw 官方域名（`SB_UPDATE_BASE`），覆盖本地前列出变更文件并要求确认；拒绝则本地不被改动。
 - **acme.sh 安装**：不再 `curl | sh` 盲执行，改为 git clone 官方仓库或下载官方 master 单文件，先落盘、校验非空与 shebang，再本地执行；兜底 `get.acme.sh` 同样先落盘校验并要求确认。
 - **引导脚本 sb.sh**：解压后校验 `install.sh` shebang 及 `sb`/`lib/*.sh` 齐套，不完整即中止。

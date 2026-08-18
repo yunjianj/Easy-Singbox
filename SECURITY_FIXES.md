@@ -26,9 +26,13 @@ GitHub 账号被盗 / jsDelivr 缓存投毒 / 仓库被入侵，都会直接转�
 
 **(c) sing-box 二进制 —— 必须做，收益最高：**
 
-- SagerNet 每个 release 均附带 `sing-box-${version}-checksums.sha256`（与二进制同目录）。
-- 在 `sb_download()` 中：下载 tar.gz 的同时下载同版本 `checksums.sha256`，用 `sha256sum -c`（或 grep 出对应行后比对）校验通过，才允许 `tar` 解压与 `install`。校验失败时打印期望值与实际值，删除临时目录并 `return 1`。
-- 注意：部分最小化系统无 `sha256sum`，需检测 `command -v sha256sum`，缺失时**打印显著警告并要求用户确认**（不能静默跳过校验）。`shasum -a 256`（macOS 风格环境）可作为备选。
+- **实勘修正（v1.2.2）**：实测 sing-box 官方 release **不附带** `sing-box-${version}-checksums.sha256`（最新版亦无），原"每个 release 均附带"前提有误。但 GitHub Release API（`/repos/SagerNet/sing-box/releases/tags/v{version}`）为每个资产提供官方 `digest` 字段（`sha256:<hex>`），作为权威校验锚点。
+- 在 `sb_download()` 中：下载 tar.gz 后按以下顺序校验，通过才允许 `tar` 解压与 `install`：
+  1. **首选**：查询 Release API 提取目标资产 digest，与本地 `sha256sum` 比对；
+  2. **备选**：发行方若附带 `checksums.sha256`（部分项目提供），下载并比对对应行；
+  3. **兜底**：以上均不可用（API 限流/无校验工具）时打印显著警告并要求用户确认，不得静默跳过。
+  - 校验失败打印期望值与实际值，删除临时目录并 `return 1`。
+  - `sha256sum` 缺失时可用 `shasum -a 256`（macOS 风格环境）备选。
 
 **(b) 脚本自更新 —— 必须做：**
 
@@ -53,7 +57,7 @@ GitHub 账号被盗 / jsDelivr 缓存投毒 / 仓库被入侵，都会直接转�
 
 - 断网或篡改 hosts 模拟下载失败时，四条路径均安全退出、不留半成品文件。
 - `sb 7`（切换内核版本）与 `sb 8`（自更新）在正常网络下行为不变（自更新多一步确认属预期变更）。
-- 手工把 checksums.sha256 中对应行改错一位，`sb_download` 必须拒绝安装。
+- 手工把 GitHub API digest 或 checksums.sha256 中对应哈希改错一位，`sb_download` 必须拒绝安装（打印期望/实际哈希并清理临时文件）。
 
 ---
 
