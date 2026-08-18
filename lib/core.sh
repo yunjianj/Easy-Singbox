@@ -147,23 +147,27 @@ core_rand_uuid() {
 
 # ---------- 交互输入 ----------
 # core_prompt <提示语> [默认值]，echo 出结果
+# 提示必须用 read -e -p 交给 readline 管理（否则退格会越过输入删掉提示）；
+# 同时把提示重定向到 stderr(1>&2)，避免被 $(core_prompt ...) 捕获进返回值。
+# 颜色用 \001/\002 包裹，告知 readline 这些 ANSI 转义为不可见字符（zero-width）。
 core_prompt() {
-  local ans
+  local ans B N p
+  B=$'\001\e[1m\002'; N=$'\001\e[0m\002'
   if [[ -n "${2:-}" ]]; then
-    printf '%s%s%s [%s]: ' "$C_BOLD" "$1" "$C_RST" "$2" >&2
+    p="${B}${1}${N} [$2]: "
   else
-    printf '%s%s%s: ' "$C_BOLD" "$1" "$C_RST" >&2
+    p="${B}${1}${N}: "
   fi
-  read -e -r ans || ans=""
+  read -e -r -p "$p" ans 1>&2 || ans=""
   if [[ -z "$ans" && -n "${2:-}" ]]; then ans="$2"; fi
   echo "$ans"
 }
 
 # core_prompt_yn <提示语>，返回 0=yes / 1=no（默认 no）
 core_prompt_yn() {
-  local ans
-  printf '%s%s%s [y/N]: ' "$C_BOLD" "$1" "$C_RST" >&2
-  read -e -r ans || ans=""
+  local ans B N
+  B=$'\001\e[1m\002'; N=$'\001\e[0m\002'
+  read -e -r -p "${B}${1}${N} [y/N]: " ans 1>&2 || ans=""
   case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
