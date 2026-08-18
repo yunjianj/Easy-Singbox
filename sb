@@ -24,17 +24,28 @@ source "$SB_DIR/lib/node.sh"
 
 # ---------- sing-box 下载/安装 ----------
 sb_latest_version() {
-  curl -s --max-time 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest \
-    | grep -o '"tag_name":"[^"]*"' | head -1 | sed 's/"tag_name":"//;s/"//;s/^v//'
+  local tag
+  tag=$(curl -s --max-time 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest \
+    | tr ',' '\n' | grep '"tag_name"' | head -1 \
+    | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/')
+  tag=${tag#v}
+  [[ -z "$tag" ]] && return 1
+  echo "$tag"
 }
 
 sb_download() {
   local version=$1 arch=$2
+  [[ -z "$version" || -z "$arch" ]] && { error "下载参数缺失（version/arch 为空）"; return 1; }
   local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
   local tmp; tmp=$(mktemp -d)
   info "下载 sing-box v${version} (${arch}) ..."
-  if ! curl -sL --retry 3 --max-time 180 -o "$tmp/sb.tar.gz" "$url"; then
-    error "下载失败: $url"; rm -rf "$tmp"; return 1
+  local http_code
+  http_code=$(curl -sL --retry 3 --max-time 180 -o "$tmp/sb.tar.gz" -w '%{http_code}' "$url")
+  if [[ "$http_code" != "200" ]]; then
+    error "下载失败（HTTP $http_code）: $url"; rm -rf "$tmp"; return 1
+  fi
+  if ! gzip -t "$tmp/sb.tar.gz" 2>/dev/null; then
+    error "下载文件不是有效的 gzip 压缩包（可能下载到了错误页面）: $url"; rm -rf "$tmp"; return 1
   fi
   tar -xzf "$tmp/sb.tar.gz" -C "$tmp"
   local bin; bin=$(find "$tmp" -name sing-box -type f | head -1)
@@ -54,6 +65,10 @@ sb_install() {
 
   local arch; arch=$(core_detect_arch)
   local ver; ver=${SB_VERSION_OVERRIDE:-$(sb_latest_version)}
+  if [[ -z "$ver" ]]; then
+    error "无法获取 sing-box 最新版本（可能网络受限或 GitHub API 不可达）。可指定版本重试：bash install.sh --version 1.13.0"
+    return 1
+  fi
   sb_download "$ver" "$arch" || return 1
 
   # 提前创建低权限用户，保证后续生成的配置/证书可被读取
@@ -154,6 +169,9 @@ sb_version_menu() {
   info "最新版本: v$latest"
   local ver; ver=$(core_prompt "要切换到的版本（如 1.13.0，留空=最新）" "$latest")
   [[ -z "$ver" ]] && ver=$latest
+  if [[ -z "$ver" ]]; then
+    error "未获取到版本号，无法切换"; return 1
+  fi
   local arch; arch=$(core_detect_arch)
   if [[ -f "$SB_BIN" ]]; then cp -f "$SB_BIN" "${SB_BIN}.bak" 2>/dev/null || true; fi
   if sb_download "$ver" "$arch"; then
