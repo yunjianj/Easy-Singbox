@@ -4,21 +4,22 @@
 
 ## 一键安装
 
-以 root 在目标服务器执行（自动下载仓库并进入安装主页面）：
+以 root 在目标服务器执行以下任一命令，自动下载并进入安装主页面：
 
 ```bash
-curl -fsSL https://github.com/yunjianj/Easy-Singbox/archive/refs/heads/main.tar.gz -o /tmp/esb.tar.gz \
-  && tar -xzf /tmp/esb.tar.gz -C /tmp \
-  && cd /tmp/Easy-Singbox-main \
-  && bash install.sh
+bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
 ```
 
-或使用 git（已装 git 时）：
+或（使用 curl）：
 
 ```bash
-git clone https://github.com/yunjianj/Easy-Singbox.git /tmp/easy-singbox \
-  && cd /tmp/easy-singbox \
-  && bash install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
+```
+
+也可先克隆再安装（已装 git 时）：
+
+```bash
+git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bash install.sh
 ```
 
 > 安装后管理命令为 `sb`（已软链到 `/usr/local/bin/sb`）。卸载请另执行仓库内 `uninstall.sh`。
