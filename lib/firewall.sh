@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib/firewall.sh — 防火墙后端适配（ufw → firewalld → iptables）
-# 端口开放三选一：1 全部(80+节点) / 2 仅节点端口 / 3 不开放
+# 端口开放三选一：1 全部(80+节点) / 2 关闭防火墙(开放所有) / 3 不开放
 # HTTP-01 模式下即使选 2/3 也需临时放行 80，完成后回收。
 
 FW_BACKEND=""
@@ -95,8 +95,18 @@ fw_close_http_temp() {
   fw_close_temp_port tcp 80
 }
 
+# 关闭防火墙（开放所有端口）。按后端执行对应操作；none 后端跳过。
+fw_disable() {
+  case "$FW_BACKEND" in
+    ufw)       ufw disable >/dev/null 2>&1 || true ;;
+    firewalld) systemctl stop firewalld 2>/dev/null || true; systemctl disable firewalld 2>/dev/null || true ;;
+    iptables)  iptables -P INPUT ACCEPT 2>/dev/null || true; iptables -F INPUT 2>/dev/null || true ;;
+    none)      : ;;
+  esac
+}
+
 # 按用户选择开放端口。参数：choice p_any p_hy2 p_tuic [hy2_hop_range]
-# choice: 1=全部 2=仅节点 3=不开放
+# choice: 1=全部 2=关闭防火墙 3=不开放
 fw_apply_choice() {
   local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4 hop=${5:-}
   fw_detect
@@ -110,11 +120,8 @@ fw_apply_choice() {
       ok "已通过 $FW_BACKEND 开放 80 + 三协议端口 + Hy2 跳跃段"
       ;;
     2)
-      fw_open_port tcp "$p_any" permanent
-      fw_open_port udp "$p_hy2" permanent
-      fw_open_port udp "$p_tuic" permanent
-      [[ -n "$hop" ]] && fw_open_range udp "$hop" permanent
-      warn "仅开放了三协议端口 + Hy2 跳跃段；HTTP-01 签发阶段将临时放行 80 并回收"
+      fw_disable
+      warn "已关闭防火墙，开放所有端口（存在安全风险，请确认网络环境可信）"
       ;;
     3)
       warn "未开放任何端口，请自行在防火墙/安全组中放行 80（仅 HTTP-01 需要）、三协议端口及 Hy2 跳跃段 $hop"
