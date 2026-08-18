@@ -6,8 +6,10 @@
 FW_BACKEND=""
 
 # 探测可用后端，结果存入 FW_BACKEND
+# 重要：仅当 ufw 处于 active 时才选 ufw 后端。若 ufw 已安装但 inactive，
+# 一律回退到 iptables 追加式 ACCEPT（绝不会“启用” ufw，避免默认拒绝锁死 SSH）。
 fw_detect() {
-  if command -v ufw >/dev/null 2>&1 && ufw status >/dev/null 2>&1; then
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw active; then
     FW_BACKEND="ufw"
   elif command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
     FW_BACKEND="firewalld"
@@ -17,6 +19,22 @@ fw_detect() {
     FW_BACKEND="none"
   fi
   echo "$FW_BACKEND"
+}
+
+# 确保 SSH 端口在防火墙中被放行，防止远程锁死。
+# 探测 sshd 实际监听端口（默认 22），按当前后端追加允许规则。
+fw_ensure_ssh() {
+  local ssh_port=22 p
+  if command -v ss >/dev/null 2>&1; then
+    p=$(ss -tlnp 2>/dev/null | grep -E ':ssh\b|sshd' | grep -oE ':{1}[0-9]+' | head -1 | tr -d ':')
+    [[ -n "$p" ]] && ssh_port=$p
+  fi
+  case "$FW_BACKEND" in
+    ufw)       ufw allow "${ssh_port}/tcp" >/dev/null 2>&1 || true ;;
+    firewalld) firewall-cmd --permanent --add-port="${ssh_port}/tcp" >/dev/null 2>&1 || true; firewall-cmd --reload >/dev/null 2>&1 || true ;;
+    iptables)  iptables -I INPUT -p tcp --dport "$ssh_port" -j ACCEPT 2>/dev/null || true ;;
+    *)         : ;;
+  esac
 }
 
 # 开放端口（临时或永久）。proto: tcp|udp；port: 数字
@@ -116,18 +134,20 @@ fw_apply_choice() {
   fw_detect
   case "$choice" in
     1)
+      # 先确保 SSH 端口放行，绝对避免远程锁死（尤其是 ufw 后端）
+      fw_ensure_ssh
       fw_open_port tcp 80 permanent
       fw_open_port tcp "$p_any" permanent
       fw_open_port udp "$p_hy2" permanent
       fw_open_port udp "$p_tuic" permanent
-      ok "已通过 $FW_BACKEND 开放 80 + 三协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
+      ok "已通过 $FW_BACKEND 开放 22(SSH) + 80 + 三协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
       ;;
     2)
       fw_disable
       warn "已关闭防火墙，开放所有端口（存在安全风险，请确认网络环境可信）"
       ;;
     3)
-      warn "未开放任何端口，请自行在防火墙/安全组中放行 80（仅 HTTP-01 需要）、三协议端口及 Hy2 基础端口 $p_hy2"
+      warn "未开放任何端口，请自行在防火墙/安全组中放行 22(SSH,避免锁死) + 80（仅 HTTP-01 需要）+ 三协议端口及 Hy2 基础端口 $p_hy2"
       ;;
   esac
 }

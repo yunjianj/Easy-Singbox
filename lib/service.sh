@@ -51,12 +51,26 @@ service_install() {
 
 service_start()   {
   systemctl daemon-reload
-  systemctl start sing-box
+  # systemctl start 仅表示 systemd 接受了启动请求，不保证进程真的起来；
+  # 用 || true 避免 set -e 在 start 失败时直接中止，以便下方健康检查能打印真实日志。
+  systemctl start sing-box 2>/dev/null || true
   # 重启服务后重新应用 Hysteria2 端口跳跃重定向（如已配置）
   if [[ -f "$SB_STATE" ]]; then
     set -a; . "$SB_STATE"; set +a
     [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2"
   fi
+  # 健康检查：等待服务真正 active（最多 15s），否则打印日志并失败，避免“假成功”
+  local i
+  for i in $(seq 1 15); do
+    systemctl is-active --quiet sing-box && break
+    sleep 1
+  done
+  if ! systemctl is-active --quiet sing-box; then
+    error "sing-box 服务未能启动，节点将无法连接。最近日志："
+    journalctl -u sing-box -n 30 --no-pager >&2 || true
+    return 1
+  fi
+  ok "sing-box 服务已启动并运行"
 }
 service_stop()    { systemctl stop sing-box 2>/dev/null || true; }
 service_restart() { systemctl daemon-reload; systemctl restart sing-box; }

@@ -15,9 +15,9 @@ node_gen() {
   if [[ -n "$OBS_HY2" ]]; then
     hy2_uri="${hy2_uri%#${name}}&obfs=salamander:${OBS_HY2}#${name}"
   fi
-  if [[ -n "$HOP_HY2" ]]; then
-    hy2_uri="${hy2_uri%#${name}}&mport=${HOP_HY2}#${name}"
-  fi
+  # 注意：sing-box 核心 inbound 不支持服务端端口跳跃（无 listen_port 范围、无 hop_ports），
+  # 脚本用 iptables/nftables REDIRECT 做入口重定向，但单监听无法实现客户端 mport 跳变的回包匹配，
+  # 故 URI 不写入 mport（否则客户端跳变必断）。客户端固定连接基础端口 PORT_HY2 即可稳定可用。
   local tuic_uri="tuic://${UUID_TUIC}:${PASS_TUIC}@${DOMAIN}:${PORT_TUIC}?congestion_control=bbr&udp_relay_mode=native&sni=${DOMAIN}&alpn=h3&insecure=0#${name}"
 
   {
