@@ -7,10 +7,17 @@ set -euo pipefail
 REPO="yunjianj/Easy-Singbox"
 BRANCH="main"
 SELF="${BASH_SOURCE[0]:-$0}"
-SELF_DIR="$(cd "$(dirname "$(readlink -f "$SELF")")" && pwd)"
 
-# 已在仓库目录内：直接运行本地 install.sh，避免重复下载
-if [[ -f "$SELF_DIR/install.sh" ]]; then
+# 通过进程替换/管道运行（如 bash <(wget ...)）时，SELF 为伪路径
+# （/dev/fd/63、/proc/PID/fd/63、/dev/stdin），无法据此定位仓库目录，
+# 直接走下载分支，避免 readlink/cd 解析伪路径失败。
+case "$SELF" in
+  /dev/fd/*|/proc/*|/dev/stdin|-) SELF_DIR="" ;;
+  *) SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd)" || SELF_DIR="" ;;
+esac
+
+# 自身位于真实仓库目录（含 install.sh）：直接运行，避免重复下载
+if [[ -n "$SELF_DIR" && -f "$SELF_DIR/install.sh" ]]; then
   cd "$SELF_DIR"
   exec bash ./install.sh "$@"
 fi
