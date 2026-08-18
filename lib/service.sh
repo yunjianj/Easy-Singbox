@@ -38,6 +38,8 @@ EOF
 
 # 生成 OpenRC init 脚本（Alpine）
 # 使用 supervise-daemon 实现崩溃自动重启（respawn_max=0 等价 systemd Restart=always）。
+# 注意：不写 need net——Alpine 无名为 net 的服务（networking 才提供虚拟 net），
+# 且多数场景无需显式网络依赖，避免启动流程被依赖解析卡住。
 service_write_openrc_unit() {
   cat > "$SB_SERVICE" <<'OPENRC_EOF'
 #!/sbin/openrc-run
@@ -54,7 +56,6 @@ respawn_max=0
 rc_ulimit="-n 100000"
 
 depend() {
-  need net
   after firewall
 }
 
@@ -147,7 +148,8 @@ service_start() {
 }
 
 service_start_openrc() {
-  rc-service sing-box start 2>/dev/null || true
+  # 不吞掉 OpenRC 的 [ ok ]/[ !! ] 标记，方便观察启动结果
+  rc-service sing-box start || true
   # 重新应用端口跳跃（与 systemd 分支一致）
   if [[ -f "$SB_STATE" ]]; then
     set -a; . "$SB_STATE"; set +a
@@ -160,8 +162,16 @@ service_start_openrc() {
     sleep 1
   done
   if ! rc-service sing-box status 2>/dev/null | grep -qw started; then
-    error "sing-box 服务未能启动，节点将无法连接。最近日志："
-    tail -n 30 /var/log/sing-box/sing-box.log >&2 2>/dev/null || true
+    error "sing-box 服务未能启动，节点将无法连接。"
+    info "服务状态: $(rc-service sing-box status 2>/dev/null || true)"
+    info "init 脚本: $SB_SERVICE"
+    error "最近日志（$SB_LOG_FILE）："
+    if [[ -s "$SB_LOG_FILE" ]]; then
+      tail -n 30 "$SB_LOG_FILE" >&2 2>/dev/null || true
+    else
+      warn "日志文件为空。请手动前台运行以查看真实报错："
+      warn "  su -s /bin/sh singbox -c '/usr/local/bin/sing-box run -c /etc/sing-box/config.json'"
+    fi
     return 1
   fi
   ok "sing-box 服务已启动并运行"
