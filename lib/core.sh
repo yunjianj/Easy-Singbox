@@ -107,6 +107,21 @@ core_sb_status() {
   echo "$installed|$running|$version|$proto"
 }
 
+# 确保 IPv6 双栈监听：“::” 在 net.ipv6.bindv6only=1 时只监听 IPv6，
+# 导致 IPv4 客户端连接被“主动拒绝”(RST)，症状与“端口没监听”完全一致，
+# 极难排查。Linux 默认该值为 0（双栈），但部分 VPS/容器镜像会设为 1。
+# 此处强制置 0 并持久化，避免任何 TLS 入站无法被 IPv4 客户端访问。
+core_ensure_dualstack() {
+  local v; v=$(sysctl -n net.ipv6.bindv6only 2>/dev/null || echo 0)
+  if [[ "$v" != "0" ]]; then
+    sysctl -w net.ipv6.bindv6only=0 >/dev/null 2>&1 || true
+  fi
+  if [[ -d /etc/sysctl.d ]]; then
+    printf 'net.ipv6.bindv6only=0\n' > /etc/sysctl.d/99-easy-singbox.conf 2>/dev/null || true
+    sysctl --system >/dev/null 2>&1 || true
+  fi
+}
+
 # ---------- 随机工具 ----------
 # 随机高位端口：动态私有端口段 49152-65535，避让 Hysteria2 跳跃段 50001-51000
 # Hysteria2 端口跳跃默认保留段（随机端口不占用，避免冲突）

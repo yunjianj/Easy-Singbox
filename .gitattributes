@@ -1,0 +1,10 @@
+# 强制所有文本文件以 LF 换行符入库与检出。
+# 否则在 Windows（core.autocrlf=true）下提交进仓库的 shell 脚本会携带 CRLF，
+# 导致 VPS 上运行时变量值被嵌入 \r（如 SB_BIN="/usr/local/bin/sing-box\r"），
+# 路径错误、服务启动失败、端口无监听，从而节点“connection refused”。
+* text=auto eol=lf
+
+# 明确把无扩展名的脚本也当作文本，避免被 text=auto 误判
+sb text eol=lf
+install.sh text eol=lf
+*.sh text eol=lf

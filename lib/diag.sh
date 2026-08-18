@@ -184,8 +184,50 @@ diag_collect() {
     echo "配置文件不存在: $SB_CONF"
   fi
 
+  # 自动结论（依据上述采集信息综合判断）
+  diag_verdict
+
   _d_sec "诊断结束"
   echo "如需更详细的运行日志，可执行 sb 选项 7 中的“切换 debug 日志级别”后复现问题再次诊断。"
+}
+
+# 自动结论：依据服务状态/端口监听/本机与公网自连，给出最可能原因与下一步。
+# best-effort，任何单项失败都不应中断。运行于子 shell 以免污染调用方 set -u。
+diag_verdict() {
+  (
+    set +u
+    if [[ ! -f "$SB_STATE" ]]; then echo "未找到状态文件，无法给出结论。"; return 0; fi
+    . "$SB_STATE" 2>/dev/null || true
+    local pa="${PORT_ANYTLS:-0}" ph="${PORT_HY2_LISTEN:-${PORT_HY2:-0}}" pt="${PORT_TUIC:-0}"
+    local svc_up=0 pa_ok=-1 ph_ok=-1 pt_ok=-1 local_ok=0 ext_ok=0 myip=""
+    systemctl is-active --quiet sing-box 2>/dev/null && svc_up=1 || svc_up=0
+    if command -v ss >/dev/null 2>&1; then
+      core_port_in_use "$pa" tcp && pa_ok=1 || pa_ok=0
+      core_port_in_use "$ph" udp && ph_ok=1 || ph_ok=0
+      core_port_in_use "$pt" udp && pt_ok=1 || pt_ok=0
+    fi
+    timeout 3 bash -c "exec 3<>/dev/tcp/127.0.0.1/$pa" 2>/dev/null && local_ok=1 || local_ok=0
+    myip=$(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || true)
+    [[ -n "$myip" ]] && { timeout 3 bash -c "exec 3<>/dev/tcp/$myip/$pa" 2>/dev/null && ext_ok=1 || ext_ok=0; }
+
+    _d_sec "13. 自动结论"
+    echo "服务运行            : $([[ $svc_up -eq 1 ]] && echo 是 || echo 否)"
+    echo "端口监听            : AnyTLS(tcp/$pa)=$([[ $pa_ok -eq 1 ]] && echo 是 || [[ $pa_ok -eq -1 ]] && echo 未知 || echo 否)  Hy2(udp/$ph)=$([[ $ph_ok -eq 1 ]] && echo 是 || [[ $ph_ok -eq -1 ]] && echo 未知 || echo 否)  TUIC(udp/$pt)=$([[ $pt_ok -eq 1 ]] && echo 是 || [[ $pt_ok -eq -1 ]] && echo 未知 || echo 否)"
+    echo "本机自连 127.0.0.1:$pa : $([[ $local_ok -eq 1 ]] && echo 通 || echo 不通)"
+    [[ -n "$myip" ]] && echo "公网自连 $myip:$pa     : $([[ $ext_ok -eq 1 ]] && echo 通 || echo 不通)"
+    echo "---- 结论 ----"
+    if [[ $svc_up -ne 1 ]]; then
+      echo "▶ 服务未运行 → 节点必然不通。查看“2.服务状态 / 3.日志”定位崩溃原因（常见：证书不可读、端口被占用、listen 绑定失败）。"
+    elif [[ $pa_ok -ne 1 || $ph_ok -ne 1 || $pt_ok -ne 1 ]]; then
+      echo "▶ 服务在运行但部分端口未监听 → 查看“3.日志”中 sing-box 启动报错（任一入站绑定失败会导致整个进程退出）。"
+    elif [[ $local_ok -eq 1 && $ext_ok -ne 1 ]]; then
+      echo "▶ 进程在收包，但公网自连不通 → 问题在防火墙/云安全组未放行端口（或服务器的 bindv6only/路由问题）。请放行 TCP $pa、UDP $ph、UDP $pt，并确认云安全组同样放行；同时确认 net.ipv6.bindv6only=0（见“1.系统”）。"
+    elif [[ $local_ok -ne 1 ]]; then
+      echo "▶ 本机自连也不通 → 服务虽 active 但未真正监听（可能启动后崩溃重启中），查看“3.日志”。"
+    else
+      echo "▶ 监听与自连均正常 → 问题大概率在客户端配置或客户端本地网络/代理。请核对 URI 与密码，并用 v2rayN 的“测试”功能查看详细错误。"
+    fi
+  ) || true
 }
 
 # 主入口：收集 → 落盘 → 提示

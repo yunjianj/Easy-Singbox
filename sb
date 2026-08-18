@@ -9,7 +9,7 @@ set -euo pipefail
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.0.8"
+SB_SCRIPT_VERSION="1.0.9"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -114,6 +114,8 @@ sb_install() {
 
   # 提前创建低权限用户，保证后续生成的配置/证书可被读取
   service_ensure_user
+  # 确保 IPv6 双栈监听（listen "::" 在 bindv6only=1 时仅监听 IPv6，致 IPv4 被 RST）
+  core_ensure_dualstack
 
   # 证书 + 域名
   local domain mode token
@@ -216,6 +218,20 @@ sb_install() {
   if ! service_verify_ports "$port_any" "$port_hy2" "$port_tuic"; then
     error "端口未正常监听，安装中止。请执行 sb → 选项 7 生成诊断报告后排查。"
     return 1
+  fi
+
+  # 外部可达性自测（best-effort）：从本机公网 IP 自连，区分“服务没在收”与“防火墙/安全组拦了”。
+  # TCP RST（被主动拒绝）通常是“无监听”；而防火墙拦截多为超时——此步可立刻给出方向。
+  local myip
+  myip=$(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || true)
+  if [[ -n "$myip" ]]; then
+    if timeout 3 bash -c "exec 3<>/dev/tcp/$myip/$port_any" 2>/dev/null; then
+      ok "公网 IP $myip:$port_any 自连成功（入站路径通畅，客户端应可连接）"
+    else
+      warn "公网 IP $myip:$port_any 自连失败。若 127.0.0.1:$port_any 可连（见上方校验），" \
+           "则是防火墙/云安全组未放行该 TCP 端口——请在服务器防火墙与云安全组放行" \
+           " TCP $port_any、UDP $port_hy2、UDP $port_tuic 后客户端即可连接。"
+    fi
   fi
 
   # 软链管理命令（失败不中断安装，sb 仍可通过绝对路径运行）
