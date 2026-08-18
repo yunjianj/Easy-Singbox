@@ -13,6 +13,7 @@ proto_tuic_inbound() {
     "tls": {
       "enabled": true,
       "server_name": "$domain",
+      "alpn": ["h3"],
       "certificate_path": "/etc/sing-box/ssl/fullchain.pem",
       "key_path": "/etc/sing-box/ssl/privkey.pem"
     }

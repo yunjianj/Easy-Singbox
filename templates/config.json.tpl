@@ -38,6 +38,7 @@
       "tls": {
         "enabled": true,
         "server_name": "__DOMAIN__",
+        "alpn": ["h3"],
         "certificate_path": "/etc/sing-box/ssl/fullchain.pem",
         "key_path": "/etc/sing-box/ssl/privkey.pem"
       }
