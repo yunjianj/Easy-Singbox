@@ -47,10 +47,12 @@ cert_install_acme() {
     fi
   fi
 
-  # 统一安装：校验 shebang 后本地执行自安装（acme.sh 支持 --install）
+  # 统一安装：校验 shebang 后，cd 到源码目录执行自安装。
+  # 注意：acme.sh 的 --install 内部用相对路径 cp acme.sh ...，
+  # 必须在 acme.sh 所在目录执行，否则 "cannot stat acme.sh" 静默失败。
   if [[ -n "$src" ]] && head -1 "$src" | grep -qE '^#!.*sh'; then
     chmod +x "$src"
-    "$src" --install >/dev/null 2>&1 || true
+    (cd "$(dirname "$src")" && ./acme.sh --install >/dev/null 2>&1) || true
   fi
 
   # 方式四（兜底）：get.acme.sh 安装脚本，同样先落盘校验，并要求用户确认
