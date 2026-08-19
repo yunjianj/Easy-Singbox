@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.14"
+SB_SCRIPT_VERSION="1.2.15"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -449,7 +449,10 @@ sb_show_menu() {
   echo " 指令集    : $arch_disp"
   echo " 虚拟化    : $virt"
   echo " BBR       : $bbr"
-  echo " IP / 地区 : $ipregion"
+  echo " IP / 地区 : "
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && echo "             $line"
+  done <<< "$ipregion"
   echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
   case "$vstat" in
     latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;

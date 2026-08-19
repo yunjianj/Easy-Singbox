@@ -80,20 +80,40 @@ core_detect_bbr() {
   fi
 }
 
-# 返回 "IP | 地区 / ISP"，失败返回 "未知 | 未知"
-core_detect_ip_region() {
-  local ip geo region isp
-  ip=$(curl -s --max-time 6 https://api.ipify.org || true)
-  [[ -z "$ip" ]] && { echo "未知 | 未知"; return; }
-  # 安全要求：必须 HTTPS（明文会向第三方泄露服务器公网 IP，且可被中间人篡改）。
-  # ipwho.is 免费 HTTPS、无需 key；字段映射：country 顶层、isp 在 connection 内，
-  # 但 grep -o '"isp":"..."' 全 JSON 唯一匹配，解析方式与原 ip-api 一致。
+# 内部：查询 ipwho.is（HTTPS）并解析为 "国家/城市 / ISP"，失败返回 "未知/未知 / 未知"
+_core_ipwho_query() {
+  local ip=$1 geo region city isp
   geo=$(curl -s --max-time 6 "https://ipwho.is/$ip" || true)
   region=$(printf '%s' "$geo" | grep -o '"country":"[^"]*"'   | head -1 | sed 's/"country":"//;s/"$//' || true)
-  isp=$(printf '%s' "$geo"    | grep -o '"isp":"[^"]*"'       | head -1 | sed 's/"isp":"//;s/"$//' || true)
+  city=$(printf '%s' "$geo"    | grep -o '"city":"[^"]*"'     | head -1 | sed 's/"city":"//;s/"$//' || true)
+  isp=$(printf '%s' "$geo"     | grep -o '"isp":"[^"]*"'      | head -1 | sed 's/"isp":"//;s/"$//' || true)
   [[ -z "$region" ]] && region="未知"
+  [[ -z "$city" ]]   && city="未知"
   [[ -z "$isp" ]]    && isp="未知"
-  echo "$ip | $region / $isp"
+  echo "$region/$city / $isp"
+}
+
+# 双栈公网 IP 与地理位置检测（精确到城市），返回两行：
+#   IPv4 <ip> | <国家>/<城市> / <ISP>
+#   IPv6 <ip> | <国家>/<城市> / <ISP>
+# 某协议无公网出口时对应行显示"不支持（本机无公网 IPv4/IPv6）"。
+# IPv4/IPv6 分别探测：api.ipify.org 仅返回 IPv4，api6.ipify.org 仅返回 IPv6。
+# 安全要求：全部走 HTTPS（明文会泄露服务器公网 IP 且可被中间人篡改）。
+core_detect_ip_region() {
+  local v4 v6
+  v4=$(curl -s --max-time 6 https://api.ipify.org || true)
+  # v6 探测失败通常意味着本机无公网 IPv6，用短超时避免拖慢菜单
+  v6=$(curl -s --max-time 4 --connect-timeout 2 https://api6.ipify.org || true)
+  if [[ -n "$v4" ]]; then
+    echo "IPv4 $v4 | $(_core_ipwho_query "$v4")"
+  else
+    echo "IPv4 不支持（本机无公网 IPv4）"
+  fi
+  if [[ -n "$v6" ]]; then
+    echo "IPv6 $v6 | $(_core_ipwho_query "$v6")"
+  else
+    echo "IPv6 不支持（本机无公网 IPv6）"
+  fi
 }
 
 # 返回 "installed|running|version|proto_count"

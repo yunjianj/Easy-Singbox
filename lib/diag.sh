@@ -202,8 +202,10 @@ diag_collect() {
       echo "解析结果: $(getent hosts "$d" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' || true)"
     fi
   fi
-  echo "出口 IPv4: $(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || echo '获取失败')"
+  echo "出口 IPv4: $(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || echo '不支持（本机无公网 IPv4）')"
+  echo "出口 IPv6: $(curl -s --max-time 4 --connect-timeout 2 https://api6.ipify.org 2>/dev/null || echo '不支持（本机无公网 IPv6）')"
   echo "本机 IPv4: $(ip -4 addr show scope global 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' | tr '\n' ' ' || true)"
+  echo "本机 IPv6: $(ip -6 addr show scope global 2>/dev/null | grep -oE 'inet6 [0-9a-f:]+' | awk '{print $2}' | tr '\n' ' ' || true)"
 
   _d_sec "12. config.json（凭证已脱敏）"
   if [[ -f "$SB_CONF" ]]; then
