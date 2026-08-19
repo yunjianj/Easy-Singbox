@@ -197,7 +197,5 @@ easy-singbox/
 │   └── protocol/       # anytls / hysteria2 / tuic 片段
 ├── templates/config.json.tpl
 ├── README.md
-├── ALPINE_SUPPORT.md    # Alpine 适配开发指南
-├── SECURITY_FIXES.md    # 安全修复交付文档
 └── TESTING.md
 ```
