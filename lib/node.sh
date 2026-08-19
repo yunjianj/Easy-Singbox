@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# lib/node.sh — 节点 URI 生成 + 二维码输出
-# 严禁生成订阅链接。安装完成或选“查看节点”后打印三种协议 URI + 二维码，写入 nodes.txt(600)。
+# lib/node.sh — 节点 URI 生成
+# 严禁生成订阅链接。安装完成或选“查看节点”后打印三种协议 URI，写入 nodes.txt(600)。
 
 node_gen() {
   if [[ ! -f "$SB_STATE" ]]; then
@@ -66,20 +66,4 @@ JSON
   echo -e "${C_CYN}## TUIC v5${C_RST}"
   echo "$tuic_uri"
   echo ""
-
-  if command -v qrencode >/dev/null 2>&1; then
-    for u in "$anytls_uri" "$hy2_uri" "$tuic_uri"; do
-      echo -e "${C_YEL}--- QR ---${C_RST}"
-      qrencode -t ANSIUTF8 "$u"
-      echo ""
-    done
-  else
-    local pkg_hint
-    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
-      pkg_hint="apk add qrencode"
-    else
-      pkg_hint="apt install qrencode / yum install qrencode"
-    fi
-    warn "未安装 qrencode，已跳过二维码。可安装后执行 sb 选“查看节点”重新生成（$pkg_hint）"
-  fi
 }

@@ -29,7 +29,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 
 
 - **强制 TLS**：AnyTLS + Hysteria2 + TUIC v5 三协议共存于同一份 `config.json`，各自独立端口、共享同一份真实证书，`tls.enabled` 均为 `true`，**不支持无证书模式、不支持手动上传证书**。
-- **不生成订阅链接**：安装完成后直接在终端打印三种协议的节点 URI + 二维码，并写入 `/etc/sing-box/nodes.txt`（权限 600）。
+- **不生成订阅链接**：安装完成后直接在终端打印三种协议的节点 URI，并写入 `/etc/sing-box/nodes.txt`（权限 600）。
 - **证书自动申请**：通过 acme.sh 向 Let's Encrypt 自动签发，支持 HTTP-01 与 DNS-01(Cloudflare) 两种验证方式。
 
 ## 支持系统
@@ -44,7 +44,6 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 
 - `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13，下载后比对 GitHub Release API 官方 digest（sha256），校验失败即拒绝安装）
 - `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
-- `qrencode`（二维码，缺失时仅跳过二维码不中断）
 - `ncurses`（可选，提供 `tput` 彩色输出；缺失时静默降级为无色，不影响功能。Alpine 上安装：`apk add ncurses`）
 
 ## 三种协议
@@ -137,7 +136,7 @@ sb log        # 直接查看最近 200 行服务日志
 
 ## 节点导入方式
 
-安装完成（或选「查看节点」）后，终端显示三种协议 URI 与二维码，并写入 `/etc/sing-box/nodes.txt`。
+安装完成（或选「查看节点」）后，终端显示三种协议 URI，并写入 `/etc/sing-box/nodes.txt`。
 
 - **Hysteria2 / TUIC**：直接复制 URI 导入客户端。
 - **Hysteria2 端口跳跃**：若启用了跳跃段，URI 会携带 `mport=段`（如 `50001-51000`），客户端将向该 UDP 范围随机跳变发包。需在**云安全组/上游防火墙放行整个 UDP 范围**，否则 Hy2 会超时连不上（本机防火墙无需放行该段，由 REDIRECT 自动转发到基础端口）。
@@ -193,7 +192,7 @@ easy-singbox/
 │   ├── firewall.sh     # 防火墙后端适配
 │   ├── cert.sh         # 证书管理（acme.sh）
 │   ├── config.sh       # 生成 config.json
-│   ├── node.sh         # 节点 URI 生成 + 二维码
+│   ├── node.sh         # 节点 URI 生成
 │   ├── port_hop.sh     # Hy2 端口跳跃 REDIRECT 规则
 │   ├── diag.sh         # 一键诊断（选项 9 / sb debug）
 │   └── protocol/       # anytls / hysteria2 / tuic 片段

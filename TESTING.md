@@ -39,7 +39,7 @@ bash install.sh
 
 ## 4. 节点 URI 与导入
 
-- [ ] 安装完成后终端显示 AnyTLS / Hysteria2 / TUIC 三种 URI + 二维码
+- [ ] 安装完成后终端显示 AnyTLS / Hysteria2 / TUIC 三种 URI
 - [ ] `/etc/sing-box/nodes.txt` 存在，权限 600，**无订阅链接**
 - [ ] 将 Hysteria2 / TUIC URI 导入客户端，可成功连接
 - [ ] AnyTLS 在不识别的客户端中用 outbound JSON 兜底导入成功
