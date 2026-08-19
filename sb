@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.10"
+SB_SCRIPT_VERSION="1.2.11"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -110,12 +110,29 @@ sb_download() {
 }
 
 # ---------- 脚本自身版本检测 ----------
-# 读取仓库根 VERSION 文件（GitHub raw 官方域名，避免第三方 CDN 缓存被投毒）；失败返回空。
+# 版本号来源优先级：GitHub API（实时，无 CDN 缓存延迟）→ raw 官方域名 → jsDelivr 镜像。
+# 为何 API 优先：raw.githubusercontent.com 在刚推送后的数分钟内会返回旧版本（CDN 缓存），
+# 导致所有设备把旧版本误判为"已是最新"、自更新失效（用户实测：同机重跑引导脚本走
+# github.com 实时源即可正常更新，证明是 raw 源滞后）。
 # 末尾 || true 屏蔽 SIGPIPE，避免 set -o pipefail 下整条管道非零触发 set -e 静默中止。
 sb_script_latest() {
   local r
-  r=$(curl -s --max-time 6 "https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/VERSION" 2>/dev/null \
-    | tr -d '[:space:]v' || true)
+  # 主：GitHub API contents（VERSION 内容为 base64；JSON 中带字面 \n，须先剥掉再解码，
+  # 否则 BusyBox base64 -d 会因非法字符解码失败）
+  r=$(curl -s --max-time 6 "https://api.github.com/repos/yunjianj/Easy-Singbox/contents/VERSION?ref=main" 2>/dev/null \
+    | grep -oE '"content"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+    | sed -E 's/.*"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/; s/\\n//g; s/\\r//g' \
+    | base64 -d 2>/dev/null | tr -d '[:space:]v' || true)
+  # 备1：raw 官方域名（API 限流/不可达时）
+  if [[ -z "$r" ]]; then
+    r=$(curl -s --max-time 6 "https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/VERSION" 2>/dev/null \
+      | tr -d '[:space:]v' || true)
+  fi
+  # 备2：jsDelivr CDN 镜像
+  if [[ -z "$r" ]]; then
+    r=$(curl -s --max-time 6 "https://cdn.jsdelivr.net/gh/yunjianj/Easy-Singbox@main/VERSION" 2>/dev/null \
+      | tr -d '[:space:]v' || true)
+  fi
   # 仅接受语义版本（数字.数字.数字，允许 v 前缀）；拒绝 HTML/错误文本，避免误报
   [[ "$r" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$r" || true
 }
@@ -347,62 +364,65 @@ sb_version_menu() {
 }
 
 # ---------- 自更新（选项 8）----------
+# 与一键引导（bash sb.sh）完全等效：整体拉取 github.com 官方 tarball，
+# 清掉旧模块目录后全量复制，避免"只替换部分文件、版本号未同步"以及
+# raw.githubusercontent.com CDN 缓存滞后导致的旧版本误判。
 sb_self_update() {
   core_root_check
-  if [[ -z "$SB_UPDATE_BASE" ]]; then
-    warn "未配置更新源 SB_UPDATE_BASE（发布仓库后可在此填写 raw 地址），跳过自更新"
-    return 0
+  info "从 github.com 官方仓库更新脚本（与一键引导等效，保留 /etc/sing-box 配置与证书）..."
+  local tb dir newver; tb=$(mktemp -d)
+  if ! curl -fsL --retry 3 --max-time 120 -o "$tb/repo.tar.gz" \
+         "https://github.com/yunjianj/Easy-Singbox/archive/refs/heads/main.tar.gz" \
+     || ! gzip -t "$tb/repo.tar.gz" 2>/dev/null; then
+    error "github.com tarball 下载失败，更新中止（网络不可达）"; rm -rf "$tb"; return 1
   fi
-  info "从 $SB_UPDATE_BASE 更新脚本（保留 /etc/sing-box 配置与证书）..."
-  local tmp; tmp=$(mktemp -d)
-  local upd_ok=1 f
-  # 必须保留 lib/ 目录层级：此前用 basename 下载会把 lib/*.sh 压平到根目录，
-  # 导致 lib 模块从未被真正更新（新版 sb 配旧版 lib，引发难以定位的版本错配）。
-  for f in install.sh sb uninstall.sh VERSION \
+  tar -xzf "$tb/repo.tar.gz" -C "$tb" 2>/dev/null || true
+  dir=$(find "$tb" -maxdepth 1 -type d -name 'Easy-Singbox-*' 2>/dev/null | head -1 || true)
+  if [[ -z "$dir" || ! -f "$dir/install.sh" ]]; then
+    error "tarball 解压异常，更新中止"; rm -rf "$tb"; return 1
+  fi
+  # 齐套校验（与 sb.sh 引导一致）：install.sh shebang + 全部运行文件
+  if ! head -1 "$dir/install.sh" | grep -qE '^#!.*sh'; then
+    error "安装包异常：install.sh 缺少 shebang，更新中止"; rm -rf "$tb"; return 1
+  fi
+  for f in sb uninstall.sh lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh \
+           lib/cert.sh lib/config.sh lib/node.sh lib/diag.sh \
+           lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
+    if [[ ! -f "$dir/$f" ]]; then
+      error "安装包不完整：缺少 $f，更新中止"; rm -rf "$tb"; return 1
+    fi
+  done
+
+  newver=$(cat "$dir/VERSION" 2>/dev/null | tr -d '[:space:]v' || true)
+
+  # 覆盖本地前展示变更摘要并要求确认（供应链防护：即便更新源被投毒，用户仍可拒绝）
+  local changed=() diffcnt=0 f
+  local file_list="install.sh sb uninstall.sh VERSION \
            lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
            lib/config.sh lib/node.sh lib/diag.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
-           templates/config.json.tpl; do
-    mkdir -p "$tmp/$(dirname "$f")"
-    if ! curl -fsL --max-time 60 -o "$tmp/$f" "$SB_UPDATE_BASE/$f"; then
-      error "下载失败: $f"; upd_ok=0; break
-    fi
-    # 空文件视为失败，避免把损坏内容覆盖到本地
-    if [[ ! -s "$tmp/$f" ]]; then
-      error "下载内容为空: $f"; upd_ok=0; break
+           templates/config.json.tpl"
+  for f in $file_list; do
+    if [[ ! -f "$SB_DIR/$f" ]] || ! cmp -s "$dir/$f" "$SB_DIR/$f"; then
+      changed+=("$f"); diffcnt=$((diffcnt+1))
     fi
   done
-  if [[ $upd_ok -eq 1 ]]; then
-    # 覆盖本地前先展示变更摘要并要求确认：列出所有与本地不同的文件，
-    # 确认前绝不写 $SB_DIR（供应链防护：即便更新源被投毒，用户仍可拒绝）。
-    local changed=() diffcnt=0
-    for f in install.sh sb uninstall.sh VERSION \
-             lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
-             lib/config.sh lib/node.sh lib/diag.sh \
-             lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
-             templates/config.json.tpl; do
-      if [[ ! -f "$SB_DIR/$f" ]] || ! cmp -s "$tmp/$f" "$SB_DIR/$f"; then
-        changed+=("$f"); diffcnt=$((diffcnt+1))
-      fi
-    done
-    if (( diffcnt == 0 )); then
-      info "已是最新版本，无文件变更（本地与远程一致）"
-      rm -rf "$tmp"; return 0
-    fi
-    info "以下 $diffcnt 个文件有变更，将覆盖本地版本："
-    printf '  - %s\n' "${changed[@]}"
-    if ! core_prompt_yn "确认覆盖本地文件并更新脚本？"; then
-      warn "已取消更新，本地文件未被改动"
-      rm -rf "$tmp"; return 0
-    fi
-    cp -rf "$tmp/." "$SB_DIR/" 2>/dev/null || true
-    chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh" 2>/dev/null || true
-    ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
-    ok "脚本已更新至最新版本（配置与证书保留）。请重新运行 sb 以加载新模块。"
-  else
-    error "更新失败，未改动本地文件"
+  if (( diffcnt == 0 )); then
+    info "已是最新版本，无文件变更（本地与远程一致）"; rm -rf "$tb"; return 0
   fi
-  rm -rf "$tmp"
+  info "以下 $diffcnt 个文件有变更${newver:+（新版本 v$newver）}，将覆盖本地版本："
+  printf '  - %s\n' "${changed[@]}"
+  if ! core_prompt_yn "确认覆盖本地文件并更新脚本？"; then
+    warn "已取消更新，本地文件未被改动"; rm -rf "$tb"; return 0
+  fi
+
+  # 与一键引导完全一致：清掉旧模块目录后整体复制（含新增文件），避免残留旧模块
+  rm -rf "$SB_DIR/lib" "$SB_DIR/templates"
+  cp -rf "$dir/." "$SB_DIR/" 2>/dev/null || true
+  chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh" 2>/dev/null || true
+  ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
+  rm -rf "$tb"
+  ok "脚本已更新至${newver:+v$newver}（与一键引导等效，配置与证书保留）。请重新运行 sb 以加载新模块。"
 }
 
 # ---------- 主页面 ----------
