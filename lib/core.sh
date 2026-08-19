@@ -88,9 +88,11 @@ _core_ipwho_query() {
   # 保留字符应编码；IPv4 无冒号，编码后与原 URL 等价）。
   url="https://ipwho.is/${ip//:/%3A}"
   geo=$(curl -s --max-time 6 "$url" || true)
-  region=$(printf '%s' "$geo" | grep -o '"country":"[^"]*"'   | head -1 | sed 's/"country":"//;s/"$//' || true)
-  city=$(printf '%s' "$geo"    | grep -o '"city":"[^"]*"'     | head -1 | sed 's/"city":"//;s/"$//' || true)
-  isp=$(printf '%s' "$geo"     | grep -o '"isp":"[^"]*"'      | head -1 | sed 's/"isp":"//;s/"$//' || true)
+  # ipwho.is 对部分来源返回 pretty-printed JSON（"country": "值" 冒号后有空格、字段换行），
+  # 解析必须兼容紧凑与美化两种格式，故冒号两侧允许空白。
+  region=$(printf '%s' "$geo" | grep -oE '"country"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"[[:space:]]*:[[:space:]]*"//;s/"$//' || true)
+  city=$(printf '%s' "$geo"    | grep -oE '"city"[[:space:]]*:[[:space:]]*"[^"]*"'     | head -1 | sed -E 's/.*"[[:space:]]*:[[:space:]]*"//;s/"$//' || true)
+  isp=$(printf '%s' "$geo"     | grep -oE '"isp"[[:space:]]*:[[:space:]]*"[^"]*"'      | head -1 | sed -E 's/.*"[[:space:]]*:[[:space:]]*"//;s/"$//' || true)
   [[ -z "$region" ]] && region="未知"
   [[ -z "$city" ]]   && city="未知"
   [[ -z "$isp" ]]    && isp="未知"
