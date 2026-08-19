@@ -82,8 +82,12 @@ core_detect_bbr() {
 
 # 内部：查询 ipwho.is（HTTPS）并解析为 "国家/城市 / ISP"，失败返回 "未知/未知 / 未知"
 _core_ipwho_query() {
-  local ip=$1 geo region city isp
-  geo=$(curl -s --max-time 6 "https://ipwho.is/$ip" || true)
+  local ip=$1 geo region city isp url
+  # IPv6 地址含冒号，部分 curl 版本/HTTP 代理会把 URL 路径中的裸冒号误当 port
+  # 分隔符导致请求失败（实测 IPv6 全返回"未知"），故统一 percent-encode（RFC 3986
+  # 保留字符应编码；IPv4 无冒号，编码后与原 URL 等价）。
+  url="https://ipwho.is/${ip//:/%3A}"
+  geo=$(curl -s --max-time 6 "$url" || true)
   region=$(printf '%s' "$geo" | grep -o '"country":"[^"]*"'   | head -1 | sed 's/"country":"//;s/"$//' || true)
   city=$(printf '%s' "$geo"    | grep -o '"city":"[^"]*"'     | head -1 | sed 's/"city":"//;s/"$//' || true)
   isp=$(printf '%s' "$geo"     | grep -o '"isp":"[^"]*"'      | head -1 | sed 's/"isp":"//;s/"$//' || true)
