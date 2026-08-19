@@ -48,11 +48,40 @@ cert_install_acme() {
   fi
 
   # 统一安装：校验 shebang 后，cd 到源码目录执行自安装。
-  # 注意：acme.sh 的 --install 内部用相对路径 cp acme.sh ...，
-  # 必须在 acme.sh 所在目录执行，否则 "cannot stat acme.sh" 静默失败。
+  # 注意：
+  # 1. acme.sh 的 --install 内部用相对路径 cp acme.sh ...，
+  #    必须在 acme.sh 所在目录执行，否则 "cannot stat acme.sh" 静默失败。
+  # 2. acme.sh 安装前会 Pre-check crontab——系统无 cron 时直接拒绝安装
+  #    （实测 Debian 最小化安装即如此）。先尝试装 cron；装不上则用
+  #    --install --force 降级（证书可用，但无法自动续期，需手动续）。
+  local install_args=""
+  if ! command -v crontab >/dev/null 2>&1; then
+    warn "系统缺少 crontab（acme.sh 要求 cron 做自动续期，其 Pre-check 会拒绝安装）。尝试安装 cron..."
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -qq >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cron >/dev/null 2>&1 || true
+    elif command -v apk >/dev/null 2>&1; then
+      apk add --no-cache dcron >/dev/null 2>&1 || true
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y -q cronie >/dev/null 2>&1 || true
+    fi
+    if command -v crontab >/dev/null 2>&1; then
+      ok "crontab 已安装"
+      if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now crond >/dev/null 2>&1 || true
+      elif command -v rc-service >/dev/null 2>&1; then
+        rc-update add crond default >/dev/null 2>&1 || true
+        rc-service crond start >/dev/null 2>&1 || true
+      fi
+    else
+      warn "cron 安装失败，将以 --force 安装 acme.sh（证书可用，但不会自动续期，需手动执行 sb 证书续期）"
+      install_args="--force"
+    fi
+  fi
+
   if [[ -n "$src" ]] && head -1 "$src" | grep -qE '^#!.*sh'; then
     chmod +x "$src"
-    (cd "$(dirname "$src")" && ./acme.sh --install >/dev/null 2>&1) || true
+    (cd "$(dirname "$src")" && ./acme.sh --install $install_args >/dev/null 2>&1) || true
   fi
 
   # 方式四（兜底）：get.acme.sh 安装脚本，同样先落盘校验，并要求用户确认
@@ -70,7 +99,7 @@ cert_install_acme() {
   rm -rf "$tmp"
   # 最终判定以文件真实存在为准
   if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
-    error "acme.sh 安装失败：$ACME_HOME/acme.sh 不存在。请检查到 github.com / raw.githubusercontent.com 的网络后重试"
+    error "acme.sh 安装失败：$ACME_HOME/acme.sh 不存在。请检查到 github.com 的网络、以及系统是否安装了 cron/crontab（acme.sh 安装前会 Pre-check）"
     return 1
   fi
   # 注册默认 CA 为 Let's Encrypt
