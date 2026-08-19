@@ -211,16 +211,26 @@ service_verify_ports() {
     warn "未安装 ss(iproute2)，跳过端口监听校验"
     return 0
   fi
+  # 竞态修复：systemd/OpenRC 返回成功只代表主进程已拉起，socket 完成 bind 需要
+  # 几十毫秒。立即检查会落在窗口内误报"未监听"（实测见端口检查竞态修复指导）。
+  # 改为带超时的轮询等待：全部端口就绪即通过（最快收敛），超时才判定失败。
+  local i
+  for i in $(seq 1 20); do   # 20 × 0.5s = 最多等 10s
+    tcp=$(core_listening_ports tcp)
+    udp=$(core_listening_ports udp)
+    [[ "$tcp" == *" $pa "* && "$udp" == *" $ph "* && "$udp" == *" $pt "* ]] && break
+    sleep 0.5
+  done
   # 各协议只列一次，纯 bash 精确匹配（不依赖 ss 过滤器语法）
-  tcp=$(core_listening_ports tcp)
-  udp=$(core_listening_ports udp)
   if [[ "$tcp" == *" $pa "* ]]; then ok "AnyTLS 监听正常 tcp/$pa"; else error "AnyTLS 未监听 tcp/$pa"; bad=1; fi
   if [[ "$udp" == *" $ph "* ]]; then ok "Hysteria2 监听正常 udp/$ph"; else error "Hysteria2 未监听 udp/$ph"; bad=1; fi
   if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
   if (( bad )); then
-    error "存在未监听的端口，客户端会报 connection refused。最近日志："
+    error "存在未监听的端口，客户端会报 connection refused。当前监听输出："
+    ss -tlnp 2>/dev/null | grep -E 'sing-box|State|Netid' | tail -n 8 >&2 || true
+    ss -ulnp 2>/dev/null | grep -E 'sing-box|State|Netid' | tail -n 8 >&2 || true
     if [[ "$INIT_SYSTEM" == "openrc" ]]; then
-      tail -n 40 /var/log/sing-box/sing-box.log >&2 2>/dev/null || true
+      tail -n 40 "$SB_LOG_FILE" >&2 2>/dev/null || true
     else
       journalctl -u sing-box -n 40 --no-pager >&2 || true
     fi
