@@ -85,7 +85,10 @@ core_detect_ip_region() {
   local ip geo region isp
   ip=$(curl -s --max-time 6 https://api.ipify.org || true)
   [[ -z "$ip" ]] && { echo "未知 | 未知"; return; }
-  geo=$(curl -s --max-time 6 "http://ip-api.com/json/$ip" || true)
+  # 安全要求：必须 HTTPS（明文会向第三方泄露服务器公网 IP，且可被中间人篡改）。
+  # ipwho.is 免费 HTTPS、无需 key；字段映射：country 顶层、isp 在 connection 内，
+  # 但 grep -o '"isp":"..."' 全 JSON 唯一匹配，解析方式与原 ip-api 一致。
+  geo=$(curl -s --max-time 6 "https://ipwho.is/$ip" || true)
   region=$(printf '%s' "$geo" | grep -o '"country":"[^"]*"'   | head -1 | sed 's/"country":"//;s/"$//' || true)
   isp=$(printf '%s' "$geo"    | grep -o '"isp":"[^"]*"'       | head -1 | sed 's/"isp":"//;s/"$//' || true)
   [[ -z "$region" ]] && region="未知"

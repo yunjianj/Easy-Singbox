@@ -189,6 +189,12 @@ cert_change() {
   [[ -x "$ACME_HOME/acme.sh" ]] || { cert_install_acme || return 1; }
   [[ -f "$SB_STATE" ]] && set -a && . "$SB_STATE" && set +a
   domain=$(core_prompt "证书域名" "${DOMAIN:-}")
+  # 输入校验（安全要求）：仅允许域名合法字符，拒绝 /、&、\、空格、换行等，
+  # 防止写入 .state 时破坏状态文件或被注入（本脚本以 root 运行，非提权面但属防御缺陷）。
+  if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+    error "域名格式不合法：仅允许字母、数字、点、连字符"
+    return 1
+  fi
   echo "证书验证方式："
   echo "  [1] HTTP-01（需 80 端口 + 域名 A 记录指向本机）"
   echo "  [2] DNS-01 Cloudflare（需 CF API Token）"
@@ -199,9 +205,13 @@ cert_change() {
   else
     cert_issue_http01 "$domain"
   fi
-  # 更新 state 中的域名
-  sed -i "s/^DOMAIN=.*/DOMAIN=$domain/" "$SB_STATE" 2>/dev/null || \
-    printf 'DOMAIN=%s\n' "$domain" >> "$SB_STATE"
+  # 更新 state 中的域名：不经 sed（域名已校验，字符集内无元字符），
+  # 覆盖式重建文件——保留其它字段行、替换 DOMAIN 行，同目录 tmp + mv 原子写入。
+  local tmp="${SB_STATE}.new.$$"
+  [[ -f "$SB_STATE" ]] && grep -v '^DOMAIN=' "$SB_STATE" > "$tmp" 2>/dev/null || true
+  printf 'DOMAIN=%s\n' "$domain" >> "$tmp"
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$SB_STATE" 2>/dev/null || { printf 'DOMAIN=%s\n' "$domain" >> "$SB_STATE"; rm -f "$tmp"; }
   service_reload
   ok "证书配置已变更并 reload"
 }
