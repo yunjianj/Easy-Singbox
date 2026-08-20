@@ -54,9 +54,22 @@ hop_apply() {
   fi
   hop_remove
   local b; b=$(hop_backend)
+  # 限定规则仅匹配默认路由出口网卡（WAN），避免劫持 docker0/br-xxx 网桥上
+  # 容器发出的出站 UDP 流量（否则容器访问外部 UDP 50001-51000 段会被静默
+  # REDIRECT 到本机 sing-box 端口）。取不到出口网卡时回退为不限定并提示。
+  local wan_if
+  wan_if=$(ip -4 route show default 2>/dev/null | \
+           awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)
   case "$b" in
     iptables)
-      if iptables -t nat -I PREROUTING -p udp --dport "${lo}:${hi}" \
+      if [[ -n "$wan_if" ]]; then
+        # $ifarg 有意不加引号做分词（值为 "-i <iface>" 或空串，内容由本脚本构造）
+        local ifarg="-i $wan_if"
+      else
+        warn "未识别到默认出口网卡，跳跃规则不限定入接口（可能影响同机 Docker 容器出站 UDP）"
+        local ifarg=""
+      fi
+      if iptables -t nat -I PREROUTING $ifarg -p udp --dport "${lo}:${hi}" \
            -j REDIRECT --to-ports "$base" -m comment --comment "$HOP_TAG" 2>/dev/null; then
         ok "端口跳跃已生效：UDP ${lo}-${hi} -> ${base}（客户端可用 mport 在范围内轮换）"
       else
@@ -66,7 +79,15 @@ hop_apply() {
     nft)
       nft add table ip easy_singbox 2>/dev/null || true
       nft 'add chain ip easy_singbox prerouting { type nat hook prerouting priority dstnat; }' 2>/dev/null || true
-      if nft add rule ip easy_singbox prerouting udp dport "${lo}"-"${hi}" redirect to :"${base}" 2>/dev/null; then
+      local rc
+      if [[ -n "$wan_if" ]]; then
+        nft add rule ip easy_singbox prerouting iifname "$wan_if" udp dport "${lo}"-"${hi}" redirect to :"${base}" 2>/dev/null
+        rc=$?
+      else
+        nft add rule ip easy_singbox prerouting udp dport "${lo}"-"${hi}" redirect to :"${base}" 2>/dev/null
+        rc=$?
+      fi
+      if (( rc == 0 )); then
         ok "端口跳跃已生效：UDP ${lo}-${hi} -> ${base}"
       else
         warn "nftables REDIRECT 失败，Hysteria2 仍可经基础端口 ${base} 连接"

@@ -206,6 +206,13 @@ diag_collect() {
   echo "出口 IPv6: $(curl -s --max-time 4 --connect-timeout 2 https://api6.ipify.org 2>/dev/null || echo '不支持（本机无公网 IPv6）')"
   echo "本机 IPv4: $(ip -4 addr show scope global 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' | tr '\n' ' ' || true)"
   echo "本机 IPv6: $(ip -6 addr show scope global 2>/dev/null | grep -oE 'inet6 [0-9a-f:]+' | awk '{print $2}' | tr '\n' ' ' || true)"
+  # Docker 同机部署排查：sysctl --system 可能把配置中的 ip_forward=0 重放覆盖
+  # Docker 运行时的 1，导致所有容器出站流量超时（重启后自愈）。
+  local fwd; fwd=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "N/A")
+  echo "IPv4 转发(ip_forward): $fwd"
+  if [[ "$fwd" == "0" ]] && command -v docker >/dev/null 2>&1; then
+    echo "[警告] Docker 已安装但 ip_forward=0，容器出站流量将超时。可执行 sysctl -w net.ipv4.ip_forward=1 恢复（并排查 /etc/sysctl.d 等配置中写死的 0）"
+  fi
 
   _d_sec "12. config.json（凭证已脱敏）"
   if [[ -f "$SB_CONF" ]]; then

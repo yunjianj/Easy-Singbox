@@ -151,7 +151,12 @@ core_ensure_dualstack() {
   fi
   if [[ -d /etc/sysctl.d ]]; then
     printf 'net.ipv6.bindv6only=0\n' > /etc/sysctl.d/99-easy-singbox.conf 2>/dev/null || true
-    sysctl --system >/dev/null 2>&1 || true
+    # 只应用本脚本自己的配置文件。`sysctl --system` 会按序重放 /run/sysctl.d/、
+    # /etc/sysctl.d/、/usr/lib/sysctl.d/、/etc/sysctl.conf 全部配置，可能把其中
+    # 的 net.ipv4.ip_forward=0 重新应用，覆盖 Docker 守护进程运行时设置的 1，
+    # 导致同一宿主机上所有容器出站流量超时（重启后才恢复）。sysctl -p 指定文件
+    # 只应用该文件，行为等价满足持久化 bindv6only=0，且不触碰任何其他内核参数。
+    sysctl -p /etc/sysctl.d/99-easy-singbox.conf >/dev/null 2>&1 || true
   fi
 }
 
