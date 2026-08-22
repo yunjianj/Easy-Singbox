@@ -54,7 +54,26 @@ cert_install_acme() {
   # 2. acme.sh 安装前会 Pre-check crontab——系统无 cron 时直接拒绝安装
   #    （实测 Debian 最小化安装即如此）。先尝试装 cron；装不上则用
   #    --install --force 降级（证书可用，但无法自动续期，需手动续）。
+  # 3. acme.sh 还会 Pre-check openssl（生成密钥的硬依赖，--force 无法绕过，
+  #    实测 Alpine 最小化安装缺 openssl 时 Pre-check 直接拒绝）。缺失则自动安装。
   local install_args=""
+  if ! command -v openssl >/dev/null 2>&1; then
+    warn "系统缺少 openssl（acme.sh Pre-check 的硬依赖，用于生成密钥）。尝试安装..."
+    if command -v apk >/dev/null 2>&1; then
+      apk add --no-cache openssl >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+      apt-get update -qq >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssl >/dev/null 2>&1 || true
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y -q openssl >/dev/null 2>&1 || true
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+      ok "openssl 已安装"
+    else
+      error "openssl 安装失败，acme.sh 无法安装（其 Pre-check 强制要求 openssl，且无法用 --force 绕过）。请手动安装后重试：apk add openssl / apt install openssl / yum install openssl"
+      rm -rf "$tmp"; return 1
+    fi
+  fi
   if ! command -v crontab >/dev/null 2>&1; then
     warn "系统缺少 crontab（acme.sh 要求 cron 做自动续期，其 Pre-check 会拒绝安装）。尝试安装 cron..."
     if command -v apt-get >/dev/null 2>&1; then
@@ -82,11 +101,15 @@ cert_install_acme() {
   if [[ -n "$src" ]] && head -1 "$src" | grep -qE '^#!.*sh'; then
     chmod +x "$src"
     (cd "$(dirname "$src")" && ./acme.sh --install $install_args >/dev/null 2>&1) || true
+    if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
+      warn "acme.sh 源码已下载（方式一/二/三），但自安装失败（Pre-check 或运行报错被静默）。"
+      warn "可在 $(dirname "$src") 下手动执行 ./acme.sh --install 查看真实报错"
+    fi
   fi
 
   # 方式四（兜底）：get.acme.sh 安装脚本，同样先落盘校验，并要求用户确认
   if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
-    warn "GitHub 各方式均失败，改用 get.acme.sh 安装脚本（已先落盘校验，非管道直执行）"
+    warn "自动安装未成功（下载或安装环节失败），改用 get.acme.sh 安装脚本（已先落盘校验，非管道直执行）"
     if core_prompt_yn "确认继续安装 acme.sh？"; then
       if curl -fsSL --retry 3 --max-time 60 -o "$tmp/acme-install.sh" "https://get.acme.sh" \
          && [[ -s "$tmp/acme-install.sh" ]] \
