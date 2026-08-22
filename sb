@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.19"
+SB_SCRIPT_VERSION="1.2.20"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -422,7 +422,10 @@ sb_self_update() {
   chmod 755 "$SB_DIR/sb" "$SB_DIR/install.sh" "$SB_DIR/uninstall.sh" 2>/dev/null || true
   ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
   rm -rf "$tb"
-  ok "脚本已更新至${newver:+v$newver}（与一键引导等效，配置与证书保留）。请重新运行 sb 以加载新模块。"
+  ok "脚本已更新至${newver:+v$newver}（与一键引导等效，配置与证书保留）。正在自动重载以加载新版脚本..."
+  # 当前进程仍持有旧版模块，exec 替换进程重新执行 sb，自动进入新版主页面，
+  # 无需用户手动退出重进。只有真正发生覆盖更新才会走到这里，不会形成循环。
+  exec bash "$SB_DIR/sb" "$@"
 }
 
 # ---------- 主页面 ----------
