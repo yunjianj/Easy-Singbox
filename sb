@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.21"
+SB_SCRIPT_VERSION="1.2.22"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -48,9 +48,17 @@ sb_latest_version() {
 sb_download() {
   local version=$1 arch=$2
   [[ -z "$version" || -z "$arch" ]] && { error "下载参数缺失（version/arch 为空）"; return 1; }
-  local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${arch}.tar.gz"
+  # musl libc 检测（Alpine/Void 等）：sing-box 官方为 musl 提供独立 `-musl` 资产，
+  # 无后缀资产是 glibc 版——在 musl 系统上因缺少 ELF 动态链接器（/lib64/ld-linux-*.so.2）
+  # 无法执行，报 "cannot execute: required file not found"（实测 Alpine 即如此）。
+  local libc=""
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    libc="-musl"
+  fi
+  local asset="sing-box-${version}-linux-${arch}${libc}.tar.gz"
+  local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/${asset}"
   local tmp; tmp=$(mktemp -d)
-  info "下载 sing-box v${version} (${arch}) ..."
+  info "下载 sing-box v${version} (${arch}${libc:-/glibc}) ..."
   local http_code
   http_code=$(curl -sL --retry 3 --max-time 180 -o "$tmp/sb.tar.gz" -w '%{http_code}' "$url")
   if [[ "$http_code" != "200" ]]; then
@@ -76,7 +84,7 @@ sb_download() {
   if [[ -n "$sum_tool" ]]; then
     local api_digest actual
     api_digest=$(curl -fsSL --retry 2 --max-time 20 "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}" 2>/dev/null \
-      | awk -v want="sing-box-${version}-linux-${arch}.tar.gz" '
+      | awk -v want="$asset" '
           /"name":/   { l=$0; sub(/.*"name": *"/,"",l); sub(/".*/,"",l); name=l }
           /"digest":/ && name==want { d=$0; sub(/.*"digest": *"sha256:/,"",d); sub(/".*/,"",d); print d; exit }
         ' || true)
