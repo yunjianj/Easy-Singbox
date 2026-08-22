@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.22"
+SB_SCRIPT_VERSION="1.2.23"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -51,8 +51,12 @@ sb_download() {
   # musl libc 检测（Alpine/Void 等）：sing-box 官方为 musl 提供独立 `-musl` 资产，
   # 无后缀资产是 glibc 版——在 musl 系统上因缺少 ELF 动态链接器（/lib64/ld-linux-*.so.2）
   # 无法执行，报 "cannot execute: required file not found"（实测 Alpine 即如此）。
+  # 检测以 musl 动态链接器文件为准（/lib/ld-musl-*.so.1，musl 系统的标志性文件，
+  # 比 ldd --version 可靠——Alpine 的 ldd 是 busybox applet，--version 不输出 musl 字样）；
+  # ldd 检测仅作补充兜底。
   local libc=""
-  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+  if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1 \
+     || { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; then
     libc="-musl"
   fi
   local asset="sing-box-${version}-linux-${arch}${libc}.tar.gz"
@@ -114,6 +118,15 @@ sb_download() {
   if [[ -z "$bin" ]]; then error "压缩包内未找到 sing-box 二进制"; rm -rf "$tmp"; return 1; fi
   install -m 755 "$bin" "$SB_BIN"
   rm -rf "$tmp"
+  # 可执行性兜底：libc 与系统不匹配（如 musl 系统误装 glibc 版）时，二进制文件在但
+  # 无法执行（cannot execute: required file not found）。立即验证并给出明确报错，
+  # 避免拖到 config check 才失败、误导排查方向。
+  if ! "$SB_BIN" version >/dev/null 2>&1; then
+    rm -f "$SB_BIN"
+    error "安装的 sing-box 无法执行（libc 与系统不匹配？报 cannot execute）。已移除该二进制"
+    warn "Alpine/musl 系统应下载 -musl 资产；请确认检测逻辑后重试，或手动下载对应版本安装"
+    return 1
+  fi
   ok "sing-box v${version} 已安装到 $SB_BIN"
 }
 
