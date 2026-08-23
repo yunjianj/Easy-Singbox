@@ -160,6 +160,8 @@ bbrfq_menu() {
       *) warn "无效选择" ;;
     esac
     echo ""
-    read -r -p "按回车继续..." _ 2>/dev/null || true
+    # 注意：read -p 的提示输出到 stderr，绝不能加 2>/dev/null 重定向，
+    # 否则用户看不到"按回车继续"提示，误以为脚本卡住（实测踩坑）。
+    read -r -p "按回车继续..." _ || true
   done
 }
