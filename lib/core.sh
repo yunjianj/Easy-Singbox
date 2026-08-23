@@ -103,6 +103,29 @@ _core_ipwho_query() {
   echo "$region/$city / $isp"
 }
 
+# 内部：判断本机是否有 IPv6 出网能力（IPv6 默认路由，或全局作用域 IPv6 地址含 ULA）。
+# 注意：ULA（fd00::/7，如 LXC 容器默认的 fd66:...）也算"有 IPv6"，因为它说明 IPv6
+# 栈已启用、且宿主可能通过 NAT66 提供出网——不能仅凭"无 2000::/3 地址"就判不支持。
+_core_has_ipv6() {
+  ip -6 route show default 2>/dev/null | grep -q default || \
+  ip -6 addr show scope global 2>/dev/null | grep -q inet6
+}
+
+# 内部：多服务探测公网 IPv6 地址（curl -6 强制 IPv6 栈）。
+# 依次尝试 api6.ipify.org / v6.ident.me（均为纯 IPv6 HTTPS 端点），单服务失败或超时
+# 自动降级下一个；全部失败返回 1。IPv4 机器 _core_has_ipv6 为假时不进入本函数。
+_core_probe_v6() {
+  local url ip
+  for url in "https://api6.ipify.org" "https://v6.ident.me"; do
+    ip=$(curl -6 -s --connect-timeout 3 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
+    if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+      echo "$ip"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # 双栈公网 IP 与地理位置检测（精确到城市），返回两行：
 #   IPv4 <ip> | <国家>/<城市> / <ISP>
 #   IPv6 <ip> | <国家>/<城市> / <ISP>
@@ -112,15 +135,20 @@ _core_ipwho_query() {
 core_detect_ip_region() {
   local v4 v6
   v4=$(curl -s --max-time 6 https://api.ipify.org || true)
-  # v6 探测失败通常意味着本机无公网 IPv6，用短超时避免拖慢菜单
-  v6=$(curl -s --max-time 4 --connect-timeout 2 https://api6.ipify.org || true)
   if [[ -n "$v4" ]]; then
     echo "IPv4 $v4 | $(_core_ipwho_query "$v4")"
   else
     echo "IPv4 不支持（本机无公网 IPv4）"
   fi
-  if [[ -n "$v6" ]]; then
-    echo "IPv6 $v6 | $(_core_ipwho_query "$v6")"
+  # 本机完全没有 IPv6（无地址/无路由）时直接判不支持，零网络开销；
+  # 有 IPv6 但公网探测失败时给出区分文案（可能宿主缺 NAT66/路由，而非"不支持"）。
+  if _core_has_ipv6; then
+    v6=$(_core_probe_v6)
+    if [[ -n "$v6" ]]; then
+      echo "IPv6 $v6 | $(_core_ipwho_query "$v6")"
+    else
+      echo "IPv6 探测失败（本机存在 IPv6 地址，但无法访问公网 IPv6——检查宿主/上游 IPv6 路由、NAT66 或安全组）"
+    fi
   else
     echo "IPv6 不支持（本机无公网 IPv6）"
   fi

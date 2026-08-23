@@ -205,9 +205,25 @@ diag_collect() {
     fi
   fi
   echo "出口 IPv4: $(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || echo '不支持（本机无公网 IPv4）')"
-  echo "出口 IPv6: $(curl -s --max-time 4 --connect-timeout 2 https://api6.ipify.org 2>/dev/null || echo '不支持（本机无公网 IPv6）')"
+  if _core_has_ipv6; then
+    local v6o; v6o=$(_core_probe_v6 || true)
+    echo "出口 IPv6: ${v6o:-探测失败（本机有 IPv6 地址但无法访问公网 IPv6，检查宿主/上游路由或 NAT66）}"
+  else
+    echo "出口 IPv6: 不支持（本机无公网 IPv6）"
+  fi
   echo "本机 IPv4: $(ip -4 addr show scope global 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' | tr '\n' ' ' || true)"
-  echo "本机 IPv6: $(ip -6 addr show scope global 2>/dev/null | grep -oE 'inet6 [0-9a-f:]+' | awk '{print $2}' | tr '\n' ' ' || true)"
+  # 本机 IPv6 区分公网(GUA, 2000::/3)与 ULA(fc00::/7)——LXC 容器常只有 ULA 却误以为
+  # "支持 IPv6"，出网实际依赖宿主 NAT66，区分显示便于定位。
+  local ip6_all a ip6_gua="" ip6_ula=""
+  ip6_all=$(ip -6 addr show scope global 2>/dev/null | grep -oE 'inet6 [0-9a-fA-F:]+' | awk '{print $2}' || true)
+  for a in $ip6_all; do
+    case "$a" in
+      f[c-f]*) ip6_ula="$ip6_ula$a " ;;
+      *)       ip6_gua="$ip6_gua$a " ;;
+    esac
+  done
+  echo "本机 IPv6(公网): ${ip6_gua:-无}"
+  echo "本机 IPv6(ULA) : ${ip6_ula:-无}"
   # Docker 同机部署排查：sysctl --system 可能把配置中的 ip_forward=0 重放覆盖
   # Docker 运行时的 1，导致所有容器出站流量超时（重启后自愈）。
   local fwd; fwd=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "N/A")
