@@ -257,3 +257,51 @@ core_port_in_use() {
   used=$(core_listening_ports "$proto")
   [[ "$used" == *" $p "* ]]
 }
+
+# 检测并按发行版自动安装基础依赖（安装 sing-box 前调用，幂等）：
+#   curl        —— 下载
+#   openssl     —— acme.sh 生成密钥的硬依赖
+#   iproute2    —— ss / ip（端口监听校验、路由提取）
+#   iptables/nftables —— 端口跳跃 REDIRECT 后端
+# 返回 0=全部就绪；1=有依赖缺失且安装后仍不可用。
+core_ensure_deps() {
+  local missing=() apk_pkgs="" apt_pkgs="" yum_pkgs="" n
+  command -v curl >/dev/null 2>&1 || { missing+=(curl);      apk_pkgs="$apk_pkgs curl";      apt_pkgs="$apt_pkgs curl";      yum_pkgs="$yum_pkgs curl"; }
+  command -v openssl >/dev/null 2>&1 || { missing+=(openssl); apk_pkgs="$apk_pkgs openssl"; apt_pkgs="$apt_pkgs openssl"; yum_pkgs="$yum_pkgs openssl"; }
+  # iproute2 同包提供 ss 与 ip（两者皆缺才计为缺失）
+  if ! command -v ss >/dev/null 2>&1 && ! command -v ip >/dev/null 2>&1; then
+    missing+=(iproute2); apk_pkgs="$apk_pkgs iproute2"; apt_pkgs="$apt_pkgs iproute2"; yum_pkgs="$yum_pkgs iproute"
+  fi
+  # 端口跳跃后端（iptables 或 nftables 任一即可）
+  if ! command -v iptables >/dev/null 2>&1 && ! command -v nft >/dev/null 2>&1; then
+    missing+=(iptables); apk_pkgs="$apk_pkgs iptables"; apt_pkgs="$apt_pkgs iptables"; yum_pkgs="$yum_pkgs iptables"
+  fi
+  [[ ${#missing[@]} -eq 0 ]] && return 0
+
+  info "检测到缺失依赖: ${missing[*]}，正在安装..."
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache $apk_pkgs >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $apt_pkgs >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q $yum_pkgs >/dev/null 2>&1 || true
+  else
+    warn "无法识别的包管理器，请手动安装: ${missing[*]}"
+    return 1
+  fi
+  # 复查（iproute2/iptables 属组判断）
+  local still=()
+  for n in "${missing[@]}"; do
+    case "$n" in
+      iproute2) command -v ss >/dev/null 2>&1 || command -v ip >/dev/null 2>&1 || still+=("$n") ;;
+      iptables) command -v iptables >/dev/null 2>&1 || command -v nft >/dev/null 2>&1 || still+=("$n") ;;
+      *) command -v "$n" >/dev/null 2>&1 || still+=("$n") ;;
+    esac
+  done
+  if [[ ${#still[@]} -gt 0 ]]; then
+    error "以下依赖安装后仍不可用: ${still[*]}（包名可能因发行版而异，请手动安装）"
+    return 1
+  fi
+  ok "依赖已就绪: ${missing[*]}"
+}

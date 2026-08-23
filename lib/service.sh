@@ -208,8 +208,12 @@ service_start_openrc() {
 service_verify_ports() {
   local pa=$1 ph=$2 pt=$3 bad=0 tcp udp
   if ! command -v ss >/dev/null 2>&1; then
-    warn "未安装 ss(iproute2)，跳过端口监听校验"
-    return 0
+    info "未安装 ss(iproute2)，尝试自动安装..."
+    core_ensure_deps >/dev/null 2>&1 || true
+    if ! command -v ss >/dev/null 2>&1; then
+      warn "ss 仍不可用（iproute2 安装失败），跳过端口监听校验"
+      return 0
+    fi
   fi
   # 竞态修复：systemd/OpenRC 返回成功只代表主进程已拉起，socket 完成 bind 需要
   # 几十毫秒，立即检查会落在窗口内误报"未监听"。

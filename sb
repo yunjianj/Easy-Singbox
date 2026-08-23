@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.27"
+SB_SCRIPT_VERSION="1.2.28"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -195,6 +195,8 @@ sb_install() {
     error "无法获取 sing-box 最新版本（可能网络受限或 GitHub API 不可达）。可指定版本重试：bash install.sh --version 1.13.0"
     return 1
   fi
+  # 开始安装前统一检测并安装基础依赖（curl/openssl/iproute2/iptables-nft），幂等
+  core_ensure_deps || return 1
   sb_download "$ver" "$arch" || return 1
 
   # 提前创建低权限用户，保证后续生成的配置/证书可被读取
