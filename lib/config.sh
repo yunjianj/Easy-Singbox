@@ -82,8 +82,16 @@ EOF
   # 降权运行：让 singbox 用户可读配置/证书
   service_chown_conf
   # 应用 Hysteria2 端口跳跃（服务端 REDIRECT；无跳跃则仅清理旧规则）
+  # 注意：hop_apply 返回非零表示规则未建立（无 iptables/nftables 且安装失败，或
+  # REDIRECT 失败），此时必须从 state 移除 HOP_HY2——否则 URI 携带 mport 但服务器
+  # 没有重定向规则，客户端跳变必连不上（单端口仍可用）。
   if [[ -n "$hop_hy2" ]]; then
-    hop_apply "$port_hy2" "$hop_hy2"
+    if hop_apply "$port_hy2" "$hop_hy2"; then
+      :
+    else
+      warn "端口跳跃未能生效（无 iptables/nftables 或 REDIRECT 失败），已从状态移除 HOP_HY2；节点将仅用基础端口 ${port_hy2}"
+      sed -i '/^HOP_HY2=/d' "$SB_STATE" 2>/dev/null || true
+    fi
   fi
   ok "config.json 已生成并通过 sing-box check"
 }

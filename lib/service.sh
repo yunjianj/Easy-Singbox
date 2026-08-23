@@ -156,7 +156,7 @@ service_start() {
   # 重启服务后重新应用 Hysteria2 端口跳跃重定向（如已配置）
   if [[ -f "$SB_STATE" ]]; then
     set -a; . "$SB_STATE"; set +a
-    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2"
+    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
   fi
   # 健康检查：等待服务真正 active（最多 15s），否则打印日志并失败，避免“假成功”
   local i
@@ -178,7 +178,7 @@ service_start_openrc() {
   # 重新应用端口跳跃（与 systemd 分支一致）
   if [[ -f "$SB_STATE" ]]; then
     set -a; . "$SB_STATE"; set +a
-    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2"
+    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
   fi
   # 健康检查：等待服务起来（最多 15s），否则打印日志并失败
   local i

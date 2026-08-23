@@ -43,7 +43,25 @@ hop_remove() {
 
 # 应用重定向：hop_apply <base_port> <range lo-hi>
 # 将 UDP lo-hi 重定向到 base_port（Hysteria2 实际监听端口）。
-# 失败不致命：Hysteria2 仍可经 base_port 正常连接。
+# 成功返回 0；规则未建立（无后端 / REDIRECT 失败）返回 1，
+# 调用方可据此决定是否保留跳跃配置（避免 URI 带 mport 却无规则导致节点不通）。
+hop_ensure_backend() {
+  # Alpine 等最小化系统默认无 iptables/nftables，先尝试按发行版安装
+  if command -v iptables >/dev/null 2>&1 || command -v nft >/dev/null 2>&1; then
+    return 0
+  fi
+  info "系统缺少 iptables/nftables（端口跳跃需要），尝试安装..."
+  if command -v apk >/dev/null 2>&1; then
+    apk add --no-cache iptables >/dev/null 2>&1 || apk add --no-cache nftables >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y -q iptables >/dev/null 2>&1 || true
+  fi
+  command -v iptables >/dev/null 2>&1 || command -v nft >/dev/null 2>&1
+}
+
 hop_apply() {
   local base=$1 range=$2 lo hi
   [[ -z "$base" || -z "$range" ]] && return 0
@@ -51,6 +69,11 @@ hop_apply() {
   if ! [[ "$lo" =~ ^[0-9]+$ && "$hi" =~ ^[0-9]+$ && "$base" =~ ^[0-9]+$ ]]; then
     warn "Hysteria2 跳跃段格式非法（$range），跳过端口跳跃（仍可经基础端口 $base 连接）"
     return 0
+  fi
+  # 无后端时自动安装；仍装不上则明确失败（调用方应移除跳跃配置，URI 不带 mport）
+  if ! hop_ensure_backend; then
+    warn "未找到 iptables/nftables 且自动安装失败，端口跳跃不可用；Hysteria2 仅基础端口 ${base} 可用"
+    return 1
   fi
   hop_remove
   local b; b=$(hop_backend)
@@ -73,7 +96,8 @@ hop_apply() {
            -j REDIRECT --to-ports "$base" -m comment --comment "$HOP_TAG" 2>/dev/null; then
         ok "端口跳跃已生效：UDP ${lo}-${hi} -> ${base}（客户端可用 mport 在范围内轮换）"
       else
-        warn "iptables REDIRECT 失败（可能缺少 NAT 模块），Hysteria2 仍可经基础端口 ${base} 连接"
+        warn "iptables REDIRECT 失败（可能缺少 NAT 模块），Hysteria2 仅基础端口 ${base} 可用"
+        return 1
       fi
       ;;
     nft)
@@ -90,11 +114,13 @@ hop_apply() {
       if (( rc == 0 )); then
         ok "端口跳跃已生效：UDP ${lo}-${hi} -> ${base}"
       else
-        warn "nftables REDIRECT 失败，Hysteria2 仍可经基础端口 ${base} 连接"
+        warn "nftables REDIRECT 失败，Hysteria2 仅基础端口 ${base} 可用"
+        return 1
       fi
       ;;
     *)
-      warn "未找到 iptables/nftables，无法设置端口跳跃；Hysteria2 仅基础端口 ${base} 可用"
+      warn "未找到 iptables/nftables，端口跳跃不可用；Hysteria2 仅基础端口 ${base} 可用"
+      return 1
       ;;
   esac
 }
