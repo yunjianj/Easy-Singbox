@@ -87,7 +87,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.2.15
+      easy-singbox  管理面板  v1.2.26
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -97,7 +97,7 @@ sb
              IPv4 1.2.3.4  |  中国/香港 / HKBN
              IPv6 2001:db8::1  |  日本/东京 / 某ISP
  Sing-Box  : 已运行  v1.13.0  (3 协议在线)
- 脚本版本  : v1.2.15  [已是最新]
+ 脚本版本  : v1.2.26  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -106,8 +106,9 @@ sb
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
  [7] 更新 / 切换内核版本
- [8] 更新脚本            (当前 v1.2.0)
+ [8] 更新脚本            (当前 v1.2.26)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
+ [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)
  [0] 退出
 ==============================================================
 ```
@@ -170,6 +171,18 @@ sb log        # 直接查看最近 200 行服务日志
 - 新增 `lib/init.sh` init 系统探测层：自动识别 systemd / OpenRC，服务管理（启停/状态/自启/日志）全部按 init 系统适配。Debian/Ubuntu 走 systemd，Alpine 走 OpenRC（`rc-service` / `rc-update`）。
 - OpenRC 下日志写入 `/var/log/sing-box/sing-box.log`，`sb log` / 诊断报告 / 安装提示均已适配；`reload` 语义等价 `restart`（sing-box 不支持 SIGHUP 热重载）。
 
+## BBR + FQ 拥塞控制
+
+主页面选项 `[10]` 或命令行 `sb bbr` 可一键启用 / 禁用 BBR 拥塞控制 + FQ 队列纪律。
+
+- **独立于 sing-box 安装**：不随一键安装自动开启，需用户手动选择。
+- **一键启用**：运行时立即生效，并持久化到 `/etc/sysctl.d/99-easy-singbox-bbr.conf`（重启后保持）。
+- **一键禁用**：恢复内核默认（cubic + pfifo_fast），移除持久化文件。
+- **内核要求**：BBR 需内核 >= 4.9，FQ 默认队列纪律需 >= 4.13。
+- **sysctl 文件独立**：BBR 使用独立的 `99-easy-singbox-bbr.conf`，与双栈配置 `99-easy-singbox.conf` 分离，互不覆写；运行时仅用 `sysctl -w`，不会重放全量配置干扰 Docker 的 `ip_forward`。
+
+BBR 对 Hysteria2 / TUIC (QUIC) 和 AnyTLS (TCP) 流量均有显著加速效果，尤其在高延迟 / 跨境链路上。
+
 ## 已知限制
 
 - **AnyTLS 客户端兼容性**：部分客户端不识别 `anytls://` URI，需使用 outbound JSON 兜底导入（见上）。
@@ -194,6 +207,7 @@ easy-singbox/
 │   ├── config.sh       # 生成 config.json
 │   ├── node.sh         # 节点 URI 生成
 │   ├── port_hop.sh     # Hy2 端口跳跃 REDIRECT 规则
+│   ├── bbrfq.sh        # BBR + FQ 拥塞控制管理（选项 10 / sb bbr）
 │   ├── diag.sh         # 一键诊断（选项 9 / sb debug）
 │   └── protocol/       # anytls / hysteria2 / tuic 片段
 ├── templates/config.json.tpl

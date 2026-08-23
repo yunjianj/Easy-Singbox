@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.25"
+SB_SCRIPT_VERSION="1.2.26"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -33,6 +33,7 @@ source "$SB_DIR/lib/protocol/tuic.sh"
 source "$SB_DIR/lib/config.sh"
 source "$SB_DIR/lib/node.sh"
 source "$SB_DIR/lib/diag.sh"
+source "$SB_DIR/lib/bbrfq.sh"
 
 # ---------- sing-box 下载/安装 ----------
 sb_latest_version() {
@@ -407,7 +408,7 @@ sb_self_update() {
     error "安装包异常：install.sh 缺少 shebang，更新中止"; rm -rf "$tb"; return 1
   fi
   for f in sb uninstall.sh lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh \
-           lib/cert.sh lib/config.sh lib/node.sh lib/diag.sh \
+           lib/cert.sh lib/config.sh lib/node.sh lib/diag.sh lib/bbrfq.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh; do
     if [[ ! -f "$dir/$f" ]]; then
       error "安装包不完整：缺少 $f，更新中止"; rm -rf "$tb"; return 1
@@ -420,7 +421,7 @@ sb_self_update() {
   local changed=() diffcnt=0 f
   local file_list="install.sh sb uninstall.sh VERSION \
            lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
-           lib/config.sh lib/node.sh lib/diag.sh \
+           lib/config.sh lib/node.sh lib/diag.sh lib/bbrfq.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
            templates/config.json.tpl"
   for f in $file_list; do
@@ -472,7 +473,7 @@ sb_show_menu() {
   echo " 系统      : $os"
   echo " 指令集    : $arch_disp"
   echo " 虚拟化    : $virt"
-  echo " BBR       : $bbr"
+  echo " BBR / FQ  : $bbr"
   echo " IP / 地区 : "
   while IFS= read -r line; do
     [[ -n "$line" ]] && echo "             $line"
@@ -497,10 +498,11 @@ sb_show_menu() {
   echo " [7] 更新 / 切换内核版本"
   echo " [8] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
   echo " [9] 诊断与日志        (排查节点不通，生成可发送的报告)"
+  echo " [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)"
   echo " [0] 退出"
   echo "=============================================================="
   local choice
-  choice=$(core_prompt "请选择 [0-9]")
+  choice=$(core_prompt "请选择 [0-10]")
   case "$choice" in
     1)
       if [[ -x "$SB_BIN" ]]; then sb_uninstall; else sb_install; fi
@@ -530,6 +532,7 @@ sb_show_menu() {
     7) sb_version_menu || true ;;
     8) sb_self_update || true ;;
     9) diag_menu || true ;;
+    10) bbrfq_menu || true ;;
     0) info "退出"; exit 0 ;;
     *) warn "无效选择" ;;
   esac
@@ -555,6 +558,7 @@ case "${1:-}" in
   install)        sb_install ;;
   nodes)          node_gen ;;
   debug|diag)     diag_run ;;
+  bbr|bbrfq)      bbrfq_menu ;;
   log|logs)
     if [[ "$INIT_SYSTEM" == "openrc" ]]; then
       tail -n 200 /var/log/sing-box/sing-box.log 2>/dev/null || echo "日志文件不可用"

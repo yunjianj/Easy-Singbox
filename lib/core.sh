@@ -72,9 +72,13 @@ core_detect_virt() {
 }
 
 core_detect_bbr() {
-  local cc; cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
-  if [[ "$cc" == *bbr* ]]; then
-    echo "已开启 (bbr)"
+  local cc qd
+  cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo "?")
+  qd=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "?")
+  if [[ "$cc" == *bbr* && "$qd" == "fq" ]]; then
+    echo "已开启 (bbr + fq)"
+  elif [[ "$cc" == *bbr* ]]; then
+    echo "已开启 (bbr, qdisc=$qd)"
   else
     echo "未开启 (${cc:-?})"
   fi

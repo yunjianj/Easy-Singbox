@@ -72,6 +72,8 @@ diag_collect() {
   echo "虚拟化: $(core_detect_virt 2>/dev/null || true)"
   # bindv6only=1 时 listen "::" 只监听 IPv6，IPv4 客户端会被“主动拒绝”
   echo "net.ipv6.bindv6only: $(sysctl -n net.ipv6.bindv6only 2>/dev/null || echo '读取失败')"
+  echo "tcp_congestion_control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '读取失败')"
+  echo "default_qdisc: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo '读取失败')"
   echo "sing-box 二进制: $([[ -x "$SB_BIN" ]] && "$SB_BIN" version 2>/dev/null | head -1 || echo '未安装')"
 
   _d_sec "2. 服务状态"
