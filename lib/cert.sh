@@ -47,6 +47,28 @@ cert_install_acme() {
     fi
   fi
 
+  # 内容校验（供应链防护）：以上三种方式此前只校验"文件在、首行是 shebang"，无内容
+  # 校验。此处统一以 GitHub API 返回的 acme.sh 官方 blob SHA1 为锚点校验实际内容，
+  # 防止上游文件被劫持替换。不符则丢弃该来源（继续尝试兜底方式）；
+  # 取不到官方值时仅提示降级，不静默通过。
+  if [[ -n "$src" && -s "$src" ]]; then
+    local acme_want acme_got
+    acme_want=$(curl -fsSL --retry 2 --max-time 20 \
+      "https://api.github.com/repos/acmesh-official/acme.sh/contents/acme.sh?ref=master" 2>/dev/null \
+      | grep -oE '"sha": *"[0-9a-f]{40}"' | head -1 | sed -E 's/.*: *"//;s/"$//' || true)
+    acme_got=$(_core_blob_sha1 "$src" 2>/dev/null || true)
+    if [[ -n "$acme_want" && -n "$acme_got" ]]; then
+      if [[ "$acme_got" != "$acme_want" ]]; then
+        error "acme.sh 内容与官方不一致（blob SHA1 不符），已丢弃该来源（供应链安全风险）"
+        src=""
+      else
+        ok "acme.sh 官方 blob SHA1 校验通过（${acme_got:0:12}…）"
+      fi
+    else
+      warn "无法获取 acme.sh 官方内容校验值（GitHub API 不可达或缺少 sha1sum/shasum），沿用基础校验"
+    fi
+  fi
+
   # 统一安装：校验 shebang 后，cd 到源码目录执行自安装。
   # 注意：
   # 1. acme.sh 的 --install 内部用相对路径 cp acme.sh ...，

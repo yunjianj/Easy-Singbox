@@ -96,6 +96,16 @@ EOF
   ok "config.json 已生成并通过 sing-box check"
 }
 
+# 内部：凭证类输入（密码 / obfs）合法性校验。
+# 采用白名单：仅允许字母数字与常见安全符号，拒绝引号、反斜杠、$、反引号、空白、
+# 控制字符与其它 shell / JSON 元字符——这些字符会破坏 .state（被 source 的 shell
+# 文件）与 config.json 的结构。空值视为合法（obfs 允许留空关闭）。
+_config_credential_ok() {
+  local v=$1
+  [[ -z "$v" ]] && return 0
+  [[ "$v" =~ ^[A-Za-z0-9!@#%^*_+=~.,:-]+$ ]]
+}
+
 # 变更代理配置（主页面选项 2）
 config_change() {
   if [[ ! -f "$SB_CONF" ]]; then
@@ -115,6 +125,27 @@ config_change() {
   uuid_tuic=$(core_prompt "TUIC UUID" "${UUID_TUIC:-$(core_rand_uuid)}")
   obfs=$(core_prompt "Hysteria2 obfs 密码(留空关闭)" "${OBS_HY2:-}")
   hop=$(core_prompt "Hysteria2 端口跳跃段(如 50001-51000，留空关闭)" "${HOP_HY2:-}")
+
+  # 输入校验（安全）：凭证类手动输入此前允许任意字符，含引号/反斜杠/$/反引号/空白
+  # 的输入会破坏 .state（被 source 的 shell 文件）与 config.json 结构。
+  # 此处统一用白名单拦截；空值合法（obfs 可留空关闭）。
+  local _item _name _val
+  for _item in "AnyTLS 密码:$pass_any" \
+               "Hysteria2 密码:$pass_hy2" \
+               "TUIC 密码:$pass_tuic" \
+               "Hysteria2 obfs:$obfs"; do
+    _name=${_item%%:*}; _val=${_item#*:}
+    if ! _config_credential_ok "$_val"; then
+      error "$_name 含非法字符（仅允许字母、数字与 !@#%^*_+=~.,:- ，不能含空格/引号/反斜杠/\$/反引号）"
+      return 1
+    fi
+  done
+  # TUIC UUID 必须是标准 8-4-4-4-12 十六进制格式（写进 .state 与 JSON 前拦截）
+  if [[ -n "$uuid_tuic" ]] \
+     && [[ ! "$uuid_tuic" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    error "TUIC UUID 格式不合法（应为 8-4-4-4-12 的十六进制格式）"
+    return 1
+  fi
 
   config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
              "$pass_any" "$pass_hy2" "$pass_tuic" "$uuid_tuic" "$obfs" "$hop"

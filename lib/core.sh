@@ -333,3 +333,63 @@ core_ensure_deps() {
   fi
   ok "依赖已就绪: ${missing[*]}"
 }
+
+# 内部：计算文件的 git blob SHA1——与 GitHub API 返回的 blob sha 同算法：
+#   sha1("blob <字节数>\0" + 文件内容)
+# 用于把本地文件与 GitHub 官方记录逐字节比对（供应链完整性校验）。
+# 失败（缺 sha1sum/shasum）返回 1；成功打印 40 位十六进制摘要。
+_core_blob_sha1() {
+  local f=$1 len tool
+  [[ -f "$f" ]] || return 1
+  if command -v sha1sum >/dev/null 2>&1; then
+    tool="sha1sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    tool="shasum -a 1"
+  else
+    return 1
+  fi
+  len=$(wc -c < "$f" 2>/dev/null | tr -d '[:space:]' || true)
+  [[ -n "$len" ]] || return 1
+  { printf 'blob %s\0' "$len"; cat "$f"; } | $tool 2>/dev/null | awk '{print $1}'
+}
+
+# 校验仓库源码内容完整性（供应链防护，对应安全审计 1.1）：
+# 此前只校验"文件在不在"（齐套检查），无法发现"结构相同、内容被整体替换"的投毒。
+# 现以 GitHub git trees API 返回的各文件官方 blob SHA1 为锚点，逐文件比对本地内容，
+# 实现真正的内容级完整性校验。
+#
+# 用法：core_verify_repo_files <解压目录> <相对路径1> [相对路径2 ...]
+# 返回：0=全部校验通过；1=发现内容不一致（疑似投毒，调用方必须中止）；
+#       2=无法获取/解析官方校验值（API 不可达、数据不全或缺 sha1 工具）——
+#         属"无法校验"而非"校验失败"，由调用方决定是否降级继续，绝不静默通过。
+core_verify_repo_files() {
+  local dir=$1; shift
+  local tree_json map f want got cnt=0
+  tree_json=$(curl -fsSL --retry 2 --max-time 25 \
+    "https://api.github.com/repos/yunjianj/Easy-Singbox/git/trees/main?recursive=1" 2>/dev/null || true)
+  # 以下用显式 if 而非 `[[ ]] && return`：set -e 下后者在条件不成立时整条语句
+  # 返回非零会触发退出（除非调用方用 || 包裹），显式 if 无此风险。
+  if [[ -z "$tree_json" ]]; then return 2; fi
+  # GitHub API 返回美化 JSON（字段分行），按 path → type → sha 顺序解析出 blob 映射；
+  # 首个 sha 是树对象自身的摘要（此时 p 为空），会被 p != "" 条件自然跳过。
+  map=$(printf '%s' "$tree_json" | awk '
+    /"path":/ { p=$0; gsub(/.*"path": *"|",?$/,"",p); next }
+    /"type":/ { t=$0; gsub(/.*"type": *"|",?$/,"",t); next }
+    /"sha":/ && p != "" { s=$0; gsub(/.*"sha": *"|",?$/,"",s)
+                          if (t=="blob" && s ~ /^[0-9a-f]{40}$/) print p" "s; p=""; t=""; next }
+  ' || true)
+  if [[ -z "$map" ]]; then return 2; fi
+  for f in "$@"; do
+    want=$(printf '%s\n' "$map" | grep -m1 "^${f} " | awk '{print $2}' || true)
+    if [[ -z "$want" ]]; then return 2; fi
+    got=$(_core_blob_sha1 "$dir/$f" || true)
+    if [[ -z "$got" ]]; then return 2; fi
+    if [[ "$got" != "$want" ]]; then
+      warn "内容校验不符: $f（官方 ${want:0:12}… 实际 ${got:0:12}…）"
+      return 1
+    fi
+    cnt=$((cnt+1))
+  done
+  if [[ $cnt -eq 0 ]]; then return 2; fi
+  return 0
+}

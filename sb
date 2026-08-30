@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.2.29"
+SB_SCRIPT_VERSION="1.2.30"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -211,6 +211,12 @@ sb_install() {
   local domain mode token
   domain=$(core_prompt "节点域名（用于 TLS 证书与节点连接）" "")
   [[ -z "$domain" ]] && { error "域名不能为空"; return 1; }
+  # 输入校验（与 cert_change 保持一致）：仅允许域名合法字符，拒绝 /、&、\、空格、
+  # 换行等，防止写入 .state 时破坏状态文件或被注入。
+  if [[ ! "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+    error "域名格式不合法：仅允许字母、数字、点、连字符"
+    return 1
+  fi
 
   echo "证书验证方式："
   echo "  [1] HTTP-01（需 80 端口空闲 + 域名 A 记录指向本机）"
@@ -426,6 +432,23 @@ sb_self_update() {
            lib/config.sh lib/node.sh lib/diag.sh lib/bbrfq.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
            templates/config.json.tpl"
+  # 内容级完整性校验（供应链防护）：齐套检查只能确认"文件在"，无法发现"文件齐全
+  # 但内容被整体替换"的投毒。此处以 GitHub git trees API 的官方 blob SHA1 为锚点，
+  # 逐文件比对下载内容。校验不符(1)必须中止；无法校验(2)则显式警告并由用户确认。
+  local vrc=0
+  core_verify_repo_files "$dir" $file_list || vrc=$?
+  if (( vrc == 1 )); then
+    error "安装包内容与 GitHub 官方不一致（blob SHA1 校验失败），已中止更新（疑似投毒）"
+    rm -rf "$tb"; return 1
+  elif (( vrc == 2 )); then
+    warn "无法获取官方内容校验值（GitHub API 不可达 / 数据不完整，或缺少 sha1sum/shasum）"
+    if ! core_prompt_yn "确认在仅做齐套校验、无内容校验的情况下继续更新？"; then
+      warn "已取消更新，本地文件未被改动"; rm -rf "$tb"; return 0
+    fi
+  else
+    ok "内容完整性校验通过（与 GitHub 官方 blob SHA1 逐文件比对）"
+  fi
+
   for f in $file_list; do
     if [[ ! -f "$SB_DIR/$f" ]] || ! cmp -s "$dir/$f" "$SB_DIR/$f"; then
       changed+=("$f"); diffcnt=$((diffcnt+1))
