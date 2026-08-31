@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.3.0"
+SB_SCRIPT_VERSION="1.3.1"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -383,8 +383,24 @@ sb_version_menu() {
     error "未获取到版本号，无法切换"; return 1
   fi
   local arch; arch=$(core_detect_arch)
+  # 切换前记录旧版本与其大版本族，用于切换后判断是否需要按新内核语法重建配置
+  local old_ver old_fam
+  old_ver=$(core_sb_ver 2>/dev/null) || old_ver=""
+  old_fam=$(core_ver_family "$old_ver") || old_fam=""
   if [[ -f "$SB_BIN" ]]; then cp -f "$SB_BIN" "${SB_BIN}.bak" 2>/dev/null || true; fi
   if sb_download "$ver" "$arch"; then
+    local new_fam; new_fam=$(core_ver_family "$ver") || new_fam=""
+    # 大版本族变化（如 1.13.x -> 1.14.x 或反向降级）时，旧 config.json 的语法
+    # 可能不被新内核接受（1.13 严格拒绝 1.14 新增字段）；自动用 .state 中的
+    # 既有参数按新内核语法重建配置，代理参数保持不变。
+    if [[ -n "$old_fam" && -n "$new_fam" && "$old_fam" != "$new_fam" ]]; then
+      info "检测到大版本切换 v$old_ver -> v$ver（$old_fam -> $new_fam），自动按新内核语法重建配置..."
+      if config_rebuild_from_state; then
+        ok "配置已按 v$ver 语法自动重建（代理参数保持不变）"
+      else
+        warn "配置自动重建失败，已回滚原配置；可执行选项 2 手动变更代理配置"
+      fi
+    fi
     service_reload
     ok "已切换至 v$ver（旧版本备份: ${SB_BIN}.bak，可手动恢复）"
   else

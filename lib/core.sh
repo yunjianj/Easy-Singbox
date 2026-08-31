@@ -155,10 +155,17 @@ core_detect_ip_region() {
 }
 
 # 返回 sing-box 版本号（如 1.14.0）。未安装或无法探测时输出空并返回 1。
+# 用纯 shell 取第 3 字段（sing-box version 首行形如 "sing-box version 1.14.0"，
+# 版本号是第 3 个词，源码见 cmd/sing-box/cmd_version.go），不依赖 awk——部分环境
+# （Windows Git Bash 的 MSYS gawk 等）下 "子进程输出 | awk" 管道可能取不到数据。
 core_sb_ver() {
   [[ -x "$SB_BIN" ]] || return 1
-  local v
-  v=$("$SB_BIN" version 2>/dev/null | head -1 | awk '{print $3}') || return 1
+  local line v
+  line=$("$SB_BIN" version 2>/dev/null | head -1) || return 1
+  # 有意的未加引号分词（IFS 空白）
+  # shellcheck disable=SC2086
+  set -- $line
+  v=${3:-}
   [[ -n "$v" ]] && echo "$v" || return 1
 }
 
@@ -175,6 +182,20 @@ core_ver_ge() {
     (( a < b )) && return 1
   done
   return 0
+}
+
+# 输出大版本族（major.minor，如 1.14），用于判断"大版本切换"（1.13 -> 1.14 等）。
+# 纯 shell 实现（兼容 busybox），去掉 -beta1/+build 与非法字符；
+# 空或无法解析的版本输出空并返回 1。
+core_ver_family() {
+  local v=$1 maj minor
+  [[ -n "$v" ]] || return 1
+  v=${v%%[-+]*}                    # 去掉 -beta1 / +build 后缀
+  v=${v//[^0-9.]/}                 # 只保留数字与点
+  maj=${v%%.*}; [[ -n "$maj" ]] || return 1
+  minor=${v#*.}; minor=${minor%%.*}
+  [[ -n "$minor" ]] || return 1
+  echo "$maj.$minor"
 }
 
 # 返回 "installed|running|version|proto_count"

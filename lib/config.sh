@@ -160,3 +160,26 @@ config_change() {
   ok "代理配置已变更并 reload"
   node_gen
 }
+
+# 从 .state 恢复既有参数并重新生成 config.json（供内核大版本切换后自动调用）。
+# 大版本切换（如 1.13 -> 1.14）后新内核的语法要求可能变化，旧 config.json
+# 可能不被新内核接受（1.13 会严格拒绝 1.14 新增字段）；此函数在不改动任何
+# 代理参数的前提下，按新内核语法重建配置。
+# 返回 0=已重建 / 1=重建失败（已回滚原配置）/ 2=无 state 或未安装，跳过。
+config_rebuild_from_state() {
+  [[ -f "$SB_STATE" ]] || { warn "未找到状态文件 $SB_STATE，跳过配置自动重建"; return 2; }
+  [[ -x "$SB_BIN" ]]  || { warn "未安装 sing-box，跳过配置自动重建"; return 2; }
+  set -a; . "$SB_STATE"; set +a
+  local bak="${SB_CONF}.pre-ver.$$"
+  [[ -f "$SB_CONF" ]] && cp -f "$SB_CONF" "$bak" 2>/dev/null || true
+  if config_gen "$DOMAIN" "$PORT_ANYTLS" "$PORT_HY2" "$PORT_TUIC" \
+                "$PASS_ANYTLS" "$PASS_HY2" "$PASS_TUIC" "$UUID_TUIC" \
+                "$OBS_HY2" "$HOP_HY2"; then
+    rm -f "$bak" 2>/dev/null || true
+    return 0
+  fi
+  # 生成或校验失败：回滚旧配置，避免带病 reload
+  [[ -f "$bak" ]] && mv -f "$bak" "$SB_CONF" 2>/dev/null || true
+  warn "config.json 重建失败，已回滚原配置"
+  return 1
+}
