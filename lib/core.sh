@@ -154,16 +154,35 @@ core_detect_ip_region() {
   fi
 }
 
+# 返回 sing-box 版本号（如 1.14.0）。未安装或无法探测时输出空并返回 1。
+core_sb_ver() {
+  [[ -x "$SB_BIN" ]] || return 1
+  local v
+  v=$("$SB_BIN" version 2>/dev/null | head -1 | awk '{print $3}') || return 1
+  [[ -n "$v" ]] && echo "$v" || return 1
+}
+
+# 语义化版本比较：cur >= target 返回 0，否则返回 1；空/非法版本按 0.0.0 处理。
+# 兼容 Alpine busybox（无 sort -V），纯数字分段比较。
+core_ver_ge() {
+  local cur=${1:-0} tgt=${2:-0} i a b
+  local -a ca ta
+  IFS='.' read -r -a ca <<< "${cur//[^0-9.]/}"
+  IFS='.' read -r -a ta <<< "${tgt//[^0-9.]/}"
+  for i in 0 1 2; do
+    a=${ca[$i]:-0}; b=${ta[$i]:-0}
+    (( a > b )) && return 0
+    (( a < b )) && return 1
+  done
+  return 0
+}
+
 # 返回 "installed|running|version|proto_count"
 core_sb_status() {
   local installed running version proto
   if [[ -x "$SB_BIN" ]]; then installed="已安装"; else installed="未安装"; fi
   if service_is_active; then running="已运行"; else running="未运行"; fi
-  if [[ -x "$SB_BIN" ]]; then
-    version=$("$SB_BIN" version 2>/dev/null | head -1 | awk '{print $3}') || version="?"
-  else
-    version="-"
-  fi
+  version=$(core_sb_ver) || version="-"; [[ -n "$version" ]] || version="?"
   if [[ -f "$SB_CONF" ]]; then
     proto=$(grep -o '"type": *"\(anytls\|hysteria2\|tuic\)"' "$SB_CONF" 2>/dev/null | wc -l)
   else

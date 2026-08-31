@@ -9,6 +9,13 @@ config_gen() {
         pass_any=$5 pass_hy2=$6 pass_tuic=$7 uuid_tuic=$8 \
         obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}}
 
+  # 探测 sing-box 大版本，决定配置语法（1.14 起支持 handshake_timeout 等新 TLS 字段）。
+  # 1.13 分支保持原有输出不变；1.14 分支按新语法生成，两个版本互不覆盖。
+  local sb_ver sb_ge_114
+  sb_ver=$(core_sb_ver 2>/dev/null) || sb_ver=""
+  if core_ver_ge "$sb_ver" 1.14; then sb_ge_114=1; else sb_ge_114=0; fi
+  [[ -n "$sb_ver" ]] || warn "无法探测 sing-box 版本，按 1.13 语法生成配置（若实际为 1.14+ 请先升级脚本）"
+
   # Hy2 实际监听端口：始终为基础整数端口（sing-box 要求 uint16，核心不支持服务端端口跳跃）。
   # 节点 URI 的 server_port 始终用基础端口 port_hy2（真实监听端口），
   # 范围通过 mport 携带（官方出站字段为 server_ports）。服务端跳跃由 lib/port_hop.sh
@@ -38,11 +45,11 @@ config_gen() {
     printf '{\n'
     printf '  "log": { "level": "info", "timestamp": true },\n'
     printf '  "inbounds": [\n'
-    proto_anytls_inbound "$port_any" "$pass_any" "$domain"
+    proto_anytls_inbound "$port_any" "$pass_any" "$domain" "$sb_ge_114"
     printf ',\n'
-    proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2"
+    proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$sb_ge_114"
     printf ',\n'
-    proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain"
+    proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain" "$sb_ge_114"
     printf '\n  ],\n'
     # 注意：DoH(https) DNS 服务器不能带 "detour": "direct" —— sing-box 运行期会报
     # FATAL "detour to an empty direct outbound makes no sense" 直接崩溃（check 却能通过）。
