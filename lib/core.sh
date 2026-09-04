@@ -247,14 +247,56 @@ PORT_HOP_HI=51000
 #    导致“每个端口都判为占用”的静默失效（旧实现即因此完全失效）；
 # 3) 固定使用 `-tu` 组合调用：此时 ss 输出带 Netid 列，本地地址恒为第 5 列。
 #    若只传 -t，输出无 Netid 列、本地地址在第 4 列，按固定列取会错位。
+
+# ---------- ss 不可用时的回退 ----------
+# 直读 /proc/net/{tcp,tcp6,udp,udp6} 提取监听端口。
+# 存在意义：Alpine / 精简容器常无 iproute2（ss），且 apk 安装也可能失败；
+# 若此时直接放弃端口校验，就无法区分"服务根本没监听"与"只是防火墙/安全组拦截"，
+# 而这两种故障的排查方向完全相反。只要有 procfs 就能得到结论，零依赖。
+#
+# 判定规则：
+#   TCP —— 仅取 state=0A(LISTEN) 的行；
+#   UDP —— 无 LISTEN 状态，socket 存在即视为在监听（含未连接的 UDP 套接字）。
+# 端口在 /proc 中是 4 位十六进制（如 1F90=8080），用 bash 内建 $((16#..)) 转换：
+# busybox awk 没有 strtonum()，不能靠 awk 做十六进制转换。
+_core_ports_from_proc() {
+  local proto=${1:-} f files is_udp out="" la st hex port
+  case "$proto" in
+    tcp) files="/proc/net/tcp /proc/net/tcp6" ;;
+    udp) files="/proc/net/udp /proc/net/udp6" ;;
+    *)   files="/proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6" ;;
+  esac
+  for f in $files; do
+    [[ -r "$f" ]] || continue
+    is_udp=0; [[ "$f" == *udp* ]] && is_udp=1
+    # 列序：sl local_address rem_address st ...
+    while read -r _ la _ st _; do
+      [[ "$la" == *:* ]] || continue
+      if (( ! is_udp )); then
+        # 状态列大小写都按大写比对（内核输出为大写 0A）
+        [[ "${st^^}" == "0A" ]] || continue
+      fi
+      hex=${la##*:}
+      [[ "$hex" =~ ^[0-9A-Fa-f]+$ ]] || continue
+      port=$((16#$hex)) 2>/dev/null || continue
+      out="$out$port "
+    done < <(tail -n +2 "$f" 2>/dev/null)
+  done
+  echo " $out "
+}
+
 core_listening_ports() {
   local proto=${1:-}
-  command -v ss >/dev/null 2>&1 || { echo " "; return; }
-  local list
-  list=$(ss -lnHtu 2>/dev/null \
-         | awk -v w="$proto" 'w=="" || $1==w {print $5}' \
-         | sed 's/.*://' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ' || true)
-  echo " ${list} "
+  if command -v ss >/dev/null 2>&1; then
+    local list
+    list=$(ss -lnHtu 2>/dev/null \
+           | awk -v w="$proto" 'w=="" || $1==w {print $5}' \
+           | sed 's/.*://' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ' || true)
+    echo " ${list} "
+    return
+  fi
+  # 无 ss 时不再返回空集（空集会让所有端口被误判为"未监听"），改用 /proc 回退
+  _core_ports_from_proc "$proto"
 }
 
 core_rand_port() {
@@ -327,18 +369,27 @@ core_port_in_use() {
 }
 
 # 检测并按发行版自动安装基础依赖（安装 sing-box 前调用，幂等）：
-#   curl        —— 下载
-#   openssl     —— acme.sh 生成密钥的硬依赖
-#   iproute2    —— ss / ip（端口监听校验、路由提取）
-#   iptables/nftables —— 端口跳跃 REDIRECT 后端
-# 返回 0=全部就绪；1=有依赖缺失且安装后仍不可用。
+#
+#   【必需】curl    —— 下载，缺失则无法获取 sing-box
+#   【必需】openssl —— acme.sh 生成密钥的硬依赖
+#   【可选】ss（包名 iproute2 / iproute2-ss / iproute）—— 端口监听校验。
+#            缺失时有 /proc/net 回退方案，不阻断安装。
+#   【可选】iptables/nftables —— 端口跳跃 REDIRECT 后端。
+#            缺失时端口跳跃降级（config_gen 会自动移除 HOP_HY2），不阻断安装。
+#
+# 返回 0=必需依赖就绪（可选依赖缺失只警告）；1=必需依赖安装后仍不可用。
+# 注意：本函数被 sb_install 以 "core_ensure_deps || return 1" 调用，
+# 因此绝不能因可选依赖缺失就返回 1——那会在精简系统上直接中止安装。
 core_ensure_deps() {
   local missing=() apk_pkgs="" apt_pkgs="" yum_pkgs="" n
   command -v curl >/dev/null 2>&1 || { missing+=(curl);      apk_pkgs="$apk_pkgs curl";      apt_pkgs="$apt_pkgs curl";      yum_pkgs="$yum_pkgs curl"; }
   command -v openssl >/dev/null 2>&1 || { missing+=(openssl); apk_pkgs="$apk_pkgs openssl"; apt_pkgs="$apt_pkgs openssl"; yum_pkgs="$yum_pkgs openssl"; }
-  # iproute2 同包提供 ss 与 ip（两者皆缺才计为缺失）
-  if ! command -v ss >/dev/null 2>&1 && ! command -v ip >/dev/null 2>&1; then
-    missing+=(iproute2); apk_pkgs="$apk_pkgs iproute2"; apt_pkgs="$apt_pkgs iproute2"; yum_pkgs="$yum_pkgs iproute"
+  # ss —— 端口监听校验的必需工具，单独判断，不能与 ip 合并成"两者皆缺"：
+  # Alpine 的 busybox 自带 ip，但默认没有 ss，且 Alpine 3.21+ 把 ss 拆到独立
+  # 子包 iproute2-ss。旧逻辑（ss 与 ip 皆缺才算缺失）导致 Alpine 上永远跳过安装，
+  # 端口监听校验随之被整体跳过，无法区分"服务没监听"与"防火墙拦截"。
+  if ! command -v ss >/dev/null 2>&1; then
+    missing+=(ss); apk_pkgs="$apk_pkgs iproute2"; apt_pkgs="$apt_pkgs iproute2"; yum_pkgs="$yum_pkgs iproute"
   fi
   # 端口跳跃后端（iptables 或 nftables 任一即可）
   if ! command -v iptables >/dev/null 2>&1 && ! command -v nft >/dev/null 2>&1; then
@@ -348,7 +399,18 @@ core_ensure_deps() {
 
   info "检测到缺失依赖: ${missing[*]}，正在安装..."
   if command -v apk >/dev/null 2>&1; then
-    apk add --no-cache $apk_pkgs >/dev/null 2>&1 || true
+    # 逐个安装而非整批：apk 是原子操作，一批包里只要有一个不存在（Alpine 各
+    # 分支包名差异大，如 iptables / iproute2-ss）就会导致整批失败，连能装的
+    # 包也一起装不上——这正是 Alpine 上"依赖安装失败"的常见根因。
+    local p
+    for p in $apk_pkgs; do
+      apk add --no-cache "$p" >/dev/null 2>&1 || true
+    done
+    # Alpine 3.21+ 将 ss 拆为独立子包 iproute2-ss（provides cmd:ss），
+    # 主包不含时单独补装，否则 ss 仍会缺失。
+    if [[ " $apk_pkgs " == *" iproute2 "* ]] && ! command -v ss >/dev/null 2>&1; then
+      apk add --no-cache iproute2-ss >/dev/null 2>&1 || true
+    fi
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1 || true
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $apt_pkgs >/dev/null 2>&1 || true
@@ -358,20 +420,31 @@ core_ensure_deps() {
     warn "无法识别的包管理器，请手动安装: ${missing[*]}"
     return 1
   fi
-  # 复查（iproute2/iptables 属组判断）
-  local still=()
+  # 复查：区分必需（curl/openssl）与可选（ss/iptables），可选缺失只警告
+  local still=() opt_still=()
   for n in "${missing[@]}"; do
     case "$n" in
-      iproute2) command -v ss >/dev/null 2>&1 || command -v ip >/dev/null 2>&1 || still+=("$n") ;;
-      iptables) command -v iptables >/dev/null 2>&1 || command -v nft >/dev/null 2>&1 || still+=("$n") ;;
+      ss) command -v ss >/dev/null 2>&1 || opt_still+=("$n") ;;
+      iptables) command -v iptables >/dev/null 2>&1 || command -v nft >/dev/null 2>&1 || opt_still+=("$n") ;;
       *) command -v "$n" >/dev/null 2>&1 || still+=("$n") ;;
     esac
   done
+  if [[ ${#opt_still[@]} -gt 0 ]]; then
+    warn "以下可选依赖不可用: ${opt_still[*]}（不影响安装，相关功能会自动降级）"
+    if command -v apk >/dev/null 2>&1; then
+      warn "Alpine 可尝试: apk add iproute2 iproute2-ss iptables"
+    fi
+    warn "ss 缺失时端口监听校验改用 /proc/net 回退；iptables 缺失时端口跳跃不启用"
+  fi
   if [[ ${#still[@]} -gt 0 ]]; then
-    error "以下依赖安装后仍不可用: ${still[*]}（包名可能因发行版而异，请手动安装）"
+    error "以下必需依赖安装后仍不可用: ${still[*]}（请手动安装）"
     return 1
   fi
-  ok "依赖已就绪: ${missing[*]}"
+  if [[ ${#opt_still[@]} -eq 0 ]]; then
+    ok "依赖已就绪: ${missing[*]}"
+  else
+    ok "必需依赖已就绪（${opt_still[*]} 缺失，相关功能已降级）"
+  fi
 }
 
 # 内部：计算文件的 git blob SHA1——与 GitHub API 返回的 blob sha 同算法：

@@ -211,8 +211,13 @@ service_verify_ports() {
     info "未安装 ss(iproute2)，尝试自动安装..."
     core_ensure_deps >/dev/null 2>&1 || true
     if ! command -v ss >/dev/null 2>&1; then
-      warn "ss 仍不可用（iproute2 安装失败），跳过端口监听校验"
-      return 0
+      # 不再"跳过校验"：Alpine/精简容器常装不上 iproute2，若此时放弃校验，
+      # 就无法区分"服务根本没监听"与"防火墙/安全组拦截"——两者排查方向相反。
+      # core_listening_ports 已内置 /proc/net 回退，这里继续照常校验。
+      warn "ss 仍不可用（iproute2 安装失败），改用 /proc/net 回退校验端口监听"
+      if command -v apk >/dev/null 2>&1; then
+        warn "如需 ss 完整功能：apk add iproute2 iproute2-ss"
+      fi
     fi
   fi
   # 竞态修复：systemd/OpenRC 返回成功只代表主进程已拉起，socket 完成 bind 需要
@@ -230,9 +235,15 @@ service_verify_ports() {
   if [[ "$udp" == *" $ph "* ]]; then ok "Hysteria2 监听正常 udp/$ph"; else error "Hysteria2 未监听 udp/$ph"; bad=1; fi
   if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
   if (( bad )); then
-    error "存在未监听的端口，客户端会报 connection refused。当前监听输出："
-    ss -tlnp 2>/dev/null | grep -E 'sing-box|State|Netid' | tail -n 8 >&2 || true
-    ss -ulnp 2>/dev/null | grep -E 'sing-box|State|Netid' | tail -n 8 >&2 || true
+    error "存在未监听的端口，客户端会报 connection refused。当前监听情况："
+    if command -v ss >/dev/null 2>&1; then
+      ss -tlnp 2>/dev/null | grep -E 'sing-box|State|Netid' | tail -n 8 >&2 || true
+      ss -ulnp 2>/dev/null | grep -E 'sing-box|State|Netid' | tail -n 8 >&2 || true
+    else
+      # 无 ss 时改用 /proc 回退输出，避免诊断信息一片空白
+      echo "  TCP 监听端口:$(core_listening_ports tcp)" >&2
+      echo "  UDP 监听端口:$(core_listening_ports udp)" >&2
+    fi
     if [[ "$INIT_SYSTEM" == "openrc" ]]; then
       tail -n 40 "$SB_LOG_FILE" >&2 2>/dev/null || true
     else
