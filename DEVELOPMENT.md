@@ -19,30 +19,48 @@
 SB_VER_LATEST="1.14"          # 最新稳定版（发新版时同步更新）
 core_proto_min_ver()          # 返回某协议的最低内核版本
 core_proto_supported()        # 判断 cur_ver 是否 >= 某协议最低版本
-core_supported_protos()       # 输出当前版本适配的协议名列表
+core_supported_protos()       # 输出当前内核支持的协议名列表
+core_proto_letter()           # 协议名 -> 字母编号（a/b/c/d...）
+core_protos_from_letters()    # 字母串 -> 协议名列表（空格分隔，自动去重排序）
+core_protos_human()           # 字母串 -> 人类可读名（"Hysteria2 + TUIC v5"）
+core_proto_transport()        # 协议名 -> tcp|udp（防火墙/端口校验用）
+core_rand_user()              # 随机用户名（SOCKS5 认证，字母开头）
 ```
 
-现有三协议（`anytls` / `hysteria2` / `tuic`）均兼容 1.13（项目整体要求 ≥ 1.13），故 `core_proto_min_ver` 对三者返回 `1.13`；**对未登记的新协议返回 `$SB_VER_LATEST`**（即新协议只按最新版适配）。
+现有 `anytls`/`hysteria2`/`tuic` 兼容 1.13（项目整体要求 ≥ 1.13），故 `core_proto_min_ver` 对三者返回 `1.13`；**未登记的新协议默认返回 `$SB_VER_LATEST`**（即新协议只按最新版适配）。`socks` 即为首个按此约定只适配 1.14 的协议。
 
-### 1.2 新增协议步骤
+### 1.2 协议编号与自选启用
 
-1. **协议片段模块**：在 `lib/protocol/<name>.sh` 新增 `proto_<name>_inbound()`（参考现有 `anytls.sh` 的 tls 块与 `ge114` 分支写法）。
-2. **登记最低版本**：在 `core_proto_min_ver()` 的 `case` 中为该协议登记 `echo "$SB_VER_LATEST"`（=1.14）——即默认只适配最新版本，**不要**顺手把旧版本语法也做出来。
-3. **接入 `config_gen`**：`lib/config.sh` 中按 `supported` 列表条件输出该协议 inbound（复制现有任一段，注意 `first` 逗号标记）。
-4. **接入 `node_gen`**：`lib/node.sh` 中按 `supported` 条件输出该协议 URI（复制现有任一段）。
+安装与「变更代理配置」均让用户**自选启用哪些协议**：字母编号组合（如 `bc` = Hysteria2 + TUIC），交互统一由 `config_pick_protos()`（`lib/config.sh`）实现。编号固定如下（新增协议按顺序续编 e/f/...，同步改 `core_proto_letter` / `core_proto_transport` / 菜单）：
+
+| 字母 | 协议 | 传输 | 认证 | 内核约束 |
+| --- | --- | --- | --- | --- |
+| a | anytls | tcp | password | >= 1.13 |
+| b | hysteria2 | udp | password | >= 1.13 |
+| c | tuic | udp | uuid+password | >= 1.13 |
+| d | socks | tcp | user+password | >= 1.14（按约定只适配最新版） |
+
+**生效集 = 用户选择(PROTOS) ∩ 内核支持**。`.state` 的 `PROTOS` 字段保存用户**原始字母选择**（而非生效集），因此内核降/升级不丢用户意图：未适配协议的参数一并保留在 `.state`，切回支持它的高版本内核时自动恢复生成（`node_gen`/`diag` 均按同一交集判断，与 `config_gen` 严格一致）。
+
+### 1.3 新增协议步骤
+
+1. **协议片段模块**：在 `lib/protocol/<name>.sh` 新增 `proto_<name>_inbound()`。若该协议官方**不支持 TLS**（如 socks），必须在模块头显著注明「非强制 TLS 例外」并在 `config_pick_protos` 菜单标红/警示。
+2. **登记最低版本与编号**：`core_proto_min_ver()` 登记最低内核版本；`core_proto_letter()` / `core_proto_transport()` / `config_pick_protos()` 菜单补充编号——默认只适配最新版，**不要**顺手把旧版本语法也做出来。
+3. **接入 `config_gen`**：按 `active`（生效集）条件输出该协议 inbound（复制现有任一段，注意 `first` 逗号标记）；`.state` 写入该协议的端口/凭证字段与 `PROTOS`。
+4. **接入 `node_gen`**：按 `active` 输出该协议 URI；无标准 URI 时输出 sing-box outbound JSON 兜底（如 socks/anytls）。
 5. **接入联动点**（避免误报/误放行）：
-   - `lib/service.sh` → `service_verify_ports()`：端口按 `supported` 清空未适配项（已有模板）。
-   - `lib/firewall.sh` → `fw_apply_choice()`：防火墙仅放行适配协议端口（已有模板）。
-   - `lib/diag.sh` 第 6 节：未适配协议标注「未适配」而非「未监听」（已有模板）。
-6. **真实版本约束若高于 1.13**：把 `core_proto_min_ver` 中该协议返回改为真实最低版本（如 `1.14`），则切换到 1.13 时该协议自动被裁剪、配置保留、切回 1.14 自动恢复。
+   - `lib/service.sh` → `service_verify_ports()`：端口按生效集清空未启用项（已有模板）。
+   - `lib/firewall.sh` → `fw_apply_choice()`：防火墙仅放行生效协议端口（已有模板）。
+   - `lib/diag.sh` 第 6 节：未启用协议标注「未启用」而非「未监听」（已有模板）。
+6. **真实版本约束若高于 1.13**：`core_proto_min_ver` 返回真实最低版本（如 `1.14`），切到 1.13 时该协议自动被裁剪、配置保留、切回 1.14 自动恢复。
 
-### 1.3 各文件版本分支写法约定
+### 1.4 各文件版本分支写法约定
 
 - 语法分支参数用**语义名**（`ge114` 表示内核 ≥ 1.14），协议模块签名尾部追加，默认 `0` 保持旧语法，避免破坏既有调用。
 - 判断大版本用 `core_ver_ge` / `core_ver_family`（纯 shell，兼容 busybox，无 `sort -V`）。
 - 版本探测失败时**按最低兼容版本（1.13）输出**并 `warn`，不中断（见 `config_gen` 起始处）。
 
-### 1.4 大版本切换自动重建
+### 1.5 大版本切换自动重建
 
 `sb` 选项 7（`sb_version_menu`）在切换成功且大版本族变化时调用
 `config_rebuild_from_state()`（`lib/config.sh`）：从 `.state` 恢复参数 → `config_gen` 按
@@ -66,7 +84,7 @@ lib/
   port_hop.sh       # Hy2 端口跳跃 REDIRECT
   diag.sh           # 一键诊断
   bbrfq.sh          # BBR + FQ
-  protocol/         # anytls / hysteria2 / tuic inbound 片段
+  protocol/         # anytls / hysteria2 / tuic / socks inbound 片段
 templates/config.json.tpl   # （已废弃，未被引用，勿再依赖）
 ```
 

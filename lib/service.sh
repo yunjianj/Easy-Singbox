@@ -202,18 +202,19 @@ service_start_openrc() {
   ok "sing-box 服务已启动并运行"
 }
 
-# 校验三协议端口是否真的处于监听状态。参数：port_any(tcp) port_hy2(udp) port_tuic(udp)
+# 校验实际生成的协议端口是否真的处于监听状态。空端口参数（未启用/未适配）自动跳过。
 # 服务 active 只代表进程活着，不代表端口 bind 成功（如端口被占用时 sing-box 会退出重启）。
 # 客户端报 "connection refused" 的直接原因就是此处无监听，故安装/变更后必须显式校验。
 service_verify_ports() {
-  local pa=$1 ph=$2 pt=$3 bad=0 tcp udp
-  # 裁剪协议后，可能只有部分协议被生成（如切到旧内核时新协议不入 config.json）。
-  # 通过 core_supported_protos 判断当前内核支持哪些协议，只校验实际生成的端口，
-  # 避免把"未适配协议"误报为"未监听"（其端口本就不该监听）。
+  local pa=$1 ph=$2 pt=$3 ps=${4:-} bad=0 tcp udp
+  # 只校验实际生成的端口：用户未选择的协议端口本身为空（调用方传入空串），
+  # 内核未适配的协议（如 1.13 下的 socks5）也不会生成 inbound。
+  # 两者都置空跳过，避免把"未启用/未适配"误报为"未监听"。
   local supported; supported=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
-  [[ " $supported " == *" anytls "* ]] || pa=""   # 未适配则跳过该校验
+  [[ " $supported " == *" anytls "* ]] || pa=""
   [[ " $supported " == *" hysteria2 "* ]] || ph=""
   [[ " $supported " == *" tuic "* ]] || pt=""
+  [[ " $supported " == *" socks "* ]] || ps=""
   if ! command -v ss >/dev/null 2>&1; then
     info "未安装 ss(iproute2)，尝试自动安装..."
     core_ensure_deps >/dev/null 2>&1 || true
@@ -239,10 +240,11 @@ service_verify_ports() {
     if [[ -n "$pa" ]] && [[ "$tcp" != *" $pa "* ]]; then okall=0; fi
     if [[ -n "$ph" ]] && [[ "$udp" != *" $ph "* ]]; then okall=0; fi
     if [[ -n "$pt" ]] && [[ "$udp" != *" $pt "* ]]; then okall=0; fi
+    if [[ -n "$ps" ]] && [[ "$tcp" != *" $ps "* ]]; then okall=0; fi
     [[ "$okall" -eq 1 ]] && break
     sleep 0.5
   done
-  # 各协议只列一次，纯 bash 精确匹配（不依赖 ss 过滤器语法）；空端口（未适配）跳过
+  # 各协议只列一次，纯 bash 精确匹配（不依赖 ss 过滤器语法）；空端口（未启用/未适配）跳过
   if [[ -n "$pa" ]]; then
     if [[ "$tcp" == *" $pa "* ]]; then ok "AnyTLS 监听正常 tcp/$pa"; else error "AnyTLS 未监听 tcp/$pa"; bad=1; fi
   fi
@@ -251,6 +253,9 @@ service_verify_ports() {
   fi
   if [[ -n "$pt" ]]; then
     if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
+  fi
+  if [[ -n "$ps" ]]; then
+    if [[ "$tcp" == *" $ps "* ]]; then ok "SOCKS5 监听正常 tcp/$ps（明文，无 TLS）"; else error "SOCKS5 未监听 tcp/$ps"; bad=1; fi
   fi
   if (( bad )); then
     error "存在未监听的端口，客户端会报 connection refused。当前监听情况："

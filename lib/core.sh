@@ -206,13 +206,67 @@ SB_VER_LATEST="1.14"
 # 返回某协议的最低内核版本（major.minor）。
 # 约定（见 DEVELOPMENT.md）：新增协议默认只适配最新版本（返回 SB_VER_LATEST），
 # 仅当某协议确实向下兼容更旧内核时才在此显式下调最低版本。
-# 现有三协议均兼容 1.13（本项目要求 sing-box >= 1.13），故统一为 1.13。
+# 现有三协议均兼容 1.13（本项目要求 sing-box >= 1.13），故统一为 1.13；
+# socks 按约定登记为最新版（1.14）——切到 1.13 时不生成其节点，配置保留。
 core_proto_min_ver() {
   local p=$1
   case "$p" in
     anytls|hysteria2|tuic) echo "1.13" ;;
+    socks) echo "$SB_VER_LATEST" ;;
     *) echo "$SB_VER_LATEST" ;;
   esac
+}
+
+# 协议名 -> 选择编号（安装/变更时让用户用字母自选启用哪些协议）
+core_proto_letter() {
+  case "$1" in
+    anytls) echo a ;;
+    hysteria2) echo b ;;
+    tuic) echo c ;;
+    socks) echo d ;;
+    *) return 1 ;;
+  esac
+}
+
+# 协议名 -> 展示名（菜单与节点输出用）
+core_proto_display() {
+  case "$1" in
+    anytls) echo "AnyTLS" ;;
+    hysteria2) echo "Hysteria2" ;;
+    tuic) echo "TUIC v5" ;;
+    socks) echo "SOCKS5" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# 协议名 -> 传输层（防火墙放行与端口校验用）
+core_proto_transport() {
+  case "$1" in
+    hysteria2|tuic) echo udp ;;
+    anytls|socks) echo tcp ;;
+    *) echo tcp ;;
+  esac
+}
+
+# 字母串 -> 协议名列表（空格分隔）。忽略空白/大小写/非法字符，自动去重，
+# 并按 a/b/c/d 固定顺序输出，便于后续稳定遍历。无有效字母时输出空。
+core_protos_from_letters() {
+  local s=${1:-} out="" p l
+  s=$(printf '%s' "$s" | tr -d '[:space:],' | tr 'A-Z' 'a-z')
+  for p in anytls hysteria2 tuic socks; do
+    l=$(core_proto_letter "$p")
+    [[ "$s" == *"$l"* ]] && out="$out $p"
+  done
+  echo "${out# }"
+}
+
+# 字母串 -> 人类可读的协议名串（如 "AnyTLS + Hysteria2"），用于提示与确认。
+core_protos_human() {
+  local p out=""
+  for p in $(core_protos_from_letters "$1"); do
+    out="$out$(core_proto_display "$p") "
+  done
+  echo "${out% }"
 }
 
 # 判断协议 proto 是否被内核版本 cur_ver 支持（cur >= 该协议最低版本）。
@@ -226,7 +280,7 @@ core_proto_supported() {
 # cur_ver 为空时按最低兼容版本（1.13）处理，保证探测失败也能生成现有三协议（与旧行为一致）。
 core_supported_protos() {
   local cur=${1:-1.13} p out=""
-  for p in anytls hysteria2 tuic; do
+  for p in anytls hysteria2 tuic socks; do
     if core_proto_supported "$p" "$cur"; then out="$out $p"; fi
   done
   echo "${out# }"
@@ -239,7 +293,7 @@ core_sb_status() {
   if service_is_active; then running="已运行"; else running="未运行"; fi
   version=$(core_sb_ver) || version="-"; [[ -n "$version" ]] || version="?"
   if [[ -f "$SB_CONF" ]]; then
-    proto=$(grep -o '"type": *"\(anytls\|hysteria2\|tuic\)"' "$SB_CONF" 2>/dev/null | wc -l)
+    proto=$(grep -o '"type": *"\(anytls\|hysteria2\|tuic\|socks\)"' "$SB_CONF" 2>/dev/null | wc -l)
   else
     proto=0
   fi
@@ -357,6 +411,17 @@ core_rand_pass() {
   # 注意：head -c 会提前关闭管道导致 tr 收到 SIGPIPE(141)；在 set -o pipefail 下
   # 整个管道返回非零，会触发 set -e 静默中止。末尾 || true 屏蔽 SIGPIPE。
   LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$len" || true
+}
+
+# 随机 SOCKS5 用户名：字母开头 + 字母数字（部分 socks 客户端对纯数字/符号用户名
+# 解析异常，故强制首字母为字母）。默认 10 位。
+core_rand_user() {
+  local len=${1:-10} first rest
+  first=$(LC_ALL=C tr -dc 'a-zA-Z' </dev/urandom 2>/dev/null | head -c 1 || true)
+  rest=$(LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom 2>/dev/null | head -c $((len - 1)) || true)
+  # /dev/urandom 不可用时兜底，避免用户名为空导致"认证被静默关闭"
+  [[ -n "$first" ]] || first="u"
+  echo "${first}${rest}"
 }
 
 core_rand_uuid() {

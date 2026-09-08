@@ -46,7 +46,8 @@ fi
 for _f in "$DIR/sb" "$DIR/uninstall.sh" "$DIR/lib/core.sh" "$DIR/lib/init.sh" \
           "$DIR/lib/service.sh" "$DIR/lib/firewall.sh" "$DIR/lib/port_hop.sh" "$DIR/lib/cert.sh" \
           "$DIR/lib/config.sh" "$DIR/lib/node.sh" "$DIR/lib/diag.sh" "$DIR/lib/bbrfq.sh" \
-          "$DIR/lib/protocol/anytls.sh" "$DIR/lib/protocol/hysteria2.sh" "$DIR/lib/protocol/tuic.sh"; do
+          "$DIR/lib/protocol/anytls.sh" "$DIR/lib/protocol/hysteria2.sh" "$DIR/lib/protocol/tuic.sh" \
+          "$DIR/lib/protocol/socks.sh"; do
   if [[ ! -f "$_f" ]]; then
     echo "解压内容不完整：缺少 $_f，已中止（疑似下载被篡改）" >&2
     exit 1
@@ -92,6 +93,7 @@ verify_content() {
            lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
            lib/config.sh lib/node.sh lib/diag.sh lib/bbrfq.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
+           lib/protocol/socks.sh \
            templates/config.json.tpl; do
     want=$(printf '%s\n' "$map" | grep -m1 "^${f} " | awk '{print $2}' || true)
     if [[ -z "$want" ]]; then return 2; fi

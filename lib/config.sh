@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# lib/config.sh — 生成 config.json（三协议共存）并保存状态文件
+# lib/config.sh — 生成 config.json（多协议按需共存）并保存状态文件
 
 # 生成完整 config.json + .state；参数：
 # domain port_any port_hy2 port_tuic pass_any pass_hy2 pass_tuic uuid_tuic [obfs_hy2] [hop_hy2]
+#        [protos] [port_socks] [user_socks] [pass_socks]
 # hop_hy2: Hysteria2 端口跳跃段（如 50001-51000），留空则不启用跳跃
+# protos: 用户选择启用的协议字母串（如 "bc"）；留空=当前内核支持的全部（兼容旧 .state）
 config_gen() {
   local domain=$1 port_any=$2 port_hy2=$3 port_tuic=$4 \
         pass_any=$5 pass_hy2=$6 pass_tuic=$7 uuid_tuic=$8 \
-        obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}}
+        obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}} \
+        protos=${11:-} port_socks=${12:-} user_socks=${13:-} pass_socks=${14:-}
 
   # 探测 sing-box 大版本，决定配置语法（1.14 起支持 handshake_timeout 等新 TLS 字段）。
   # 1.13 分支保持原有输出不变；1.14 分支按新语法生成，两个版本互不覆盖。
@@ -15,10 +18,23 @@ config_gen() {
   sb_ver=$(core_sb_ver 2>/dev/null) || sb_ver=""
   if core_ver_ge "$sb_ver" 1.14; then sb_ge_114=1; else sb_ge_114=0; fi
   [[ -n "$sb_ver" ]] || warn "无法探测 sing-box 版本，按 1.13 语法生成配置（若实际为 1.14+ 请先升级脚本）"
-  # 按内核版本裁剪协议：仅生成当前内核支持的 inbound。不支持的协议（如切到旧内核时
-  # 尚未适配的新协议）不写入 config.json，但 .state 仍保留其参数——切回支持该协议的
-  # 高版本内核时由 config_rebuild_from_state 自动恢复（见 DEVELOPMENT.md 约定）。
+  # 内核支持的协议集
   supported=$(core_supported_protos "$sb_ver")
+  # 实际生效集 = 用户选择 ∩ 内核支持。
+  #   用户选择由 protos 字母串给出（安装/变更时自选，见 sb_install / config_change）；
+  #   内核不支持的协议（如切到 1.13 时的 socks5）即使被选中也不生成 inbound，
+  #   其参数仍保留在 .state，切回支持的高版本时自动恢复（DEVELOPMENT.md 约定）。
+  local chosen active="" p
+  if [[ -n "$protos" ]]; then
+    chosen=$(core_protos_from_letters "$protos")
+  else
+    chosen="$supported"   # 未指定（旧 .state / 直接调用）：沿用内核支持的全部
+  fi
+  for p in $chosen; do
+    if core_proto_supported "$p" "$sb_ver"; then active="$active $p"; fi
+  done
+  active="${active# }"
+  [[ -n "$active" ]] || { error "没有可生成的协议（已选: ${protos:-全部}，内核 v${sb_ver:-?}）"; return 1; }
 
   # Hy2 实际监听端口：始终为基础整数端口（sing-box 要求 uint16，核心不支持服务端端口跳跃）。
   # 节点 URI 的 server_port 始终用基础端口 port_hy2（真实监听端口），
@@ -27,20 +43,41 @@ config_gen() {
   # 客户端跳跃需额外在外部防火墙/安全组放行整个范围。
   local hy2_listen="$port_hy2" port_hy2_node="$port_hy2"
 
-  # 端口不可重复（P2 约束）
-  if [[ "$port_any" == "$port_hy2" || "$port_any" == "$port_tuic" || "$port_hy2" == "$port_tuic" ]]; then
-    error "三个协议端口不能重复（anytls=$port_any hy2=$port_hy2 tuic=$port_tuic）"
-    return 1
-  fi
-  # Hysteria2 跳跃段即 Hy2 监听端口，故仅检查与 anytls / tuic 固定监听端口是否重叠
+  # 端口不可重复：仅校验实际生效协议的非空端口（未启用的协议端口为空，
+  # 若参与比较会出现 "" == "" 的误判）。
+  local _p _port _seen=" "
+  for _p in $active; do
+    case "$_p" in
+      anytls)    _port=$port_any ;;
+      hysteria2) _port=$port_hy2 ;;
+      tuic)      _port=$port_tuic ;;
+      socks)     _port=$port_socks ;;
+    esac
+    [[ -z "$_port" ]] && continue
+    if [[ "$_seen" == *" $_port "* ]]; then
+      error "端口重复：$(core_proto_display "$_p") 使用了已被占用的 $_port"
+      return 1
+    fi
+    _seen="$_seen$_port "
+  done
+  # Hysteria2 跳跃段即 Hy2 监听端口，故仅检查与其余生效协议的监听端口是否重叠
   if [[ -n "$hop_hy2" ]]; then
     local hlo hhi
     hlo=${hop_hy2%-*}; hhi=${hop_hy2#*-}
-    if (( port_any >= hlo && port_any <= hhi )) || \
-       (( port_tuic >= hlo && port_tuic <= hhi )); then
-      error "Hysteria2 跳跃段 $hop_hy2 与某个监听端口重叠，请更换端口或跳跃段"
-      return 1
-    fi
+    for _p in $active; do
+      case "$_p" in
+        hysteria2) continue ;;   # 跳跃段归属 Hy2 自身，不算冲突
+        anytls)    _port=$port_any ;;
+        tuic)      _port=$port_tuic ;;
+        socks)     _port=$port_socks ;;
+        *) continue ;;
+      esac
+      [[ -z "$_port" ]] && continue
+      if (( _port >= hlo && _port <= hhi )); then
+        error "Hysteria2 跳跃段 $hop_hy2 与 $(core_proto_display "$_p") 端口 $_port 重叠，请更换端口或跳跃段"
+        return 1
+      fi
+    done
   fi
 
   mkdir -p "$SB_DIR_CONF" "$SB_DIR_SSL"
@@ -49,25 +86,31 @@ config_gen() {
     printf '{\n'
     printf '  "log": { "level": "info", "timestamp": true },\n'
     printf '  "inbounds": [\n'
-    # 逐协议输出，仅保留当前内核支持的 inbound；用 first 标记控制逗号，
+    # 逐协议输出，仅生成"用户已选 且 内核支持"的 inbound；用 first 标记控制逗号，
     # 避免被裁剪协议留下的空行残成非法 JSON（如 ",,\n" 或孤立的逗号）。
     local first=1
-    if [[ " $supported " == *" anytls "* ]]; then
+    if [[ " $active " == *" anytls "* ]]; then
       [[ $first -eq 0 ]] && printf ',\n'
       proto_anytls_inbound "$port_any" "$pass_any" "$domain" "$sb_ge_114"
       first=0
     fi
-    if [[ " $supported " == *" hysteria2 "* ]]; then
+    if [[ " $active " == *" hysteria2 "* ]]; then
       [[ $first -eq 0 ]] && printf ',\n'
       proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$sb_ge_114"
       first=0
     fi
-    if [[ " $supported " == *" tuic "* ]]; then
+    if [[ " $active " == *" tuic "* ]]; then
       [[ $first -eq 0 ]] && printf ',\n'
       proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain" "$sb_ge_114"
       first=0
     fi
-    # 极端情况：当前内核一个协议都不支持（理论上最低版本均 <= 1.13，不会发生）——兜底报错。
+    if [[ " $active " == *" socks "* ]]; then
+      [[ $first -eq 0 ]] && printf ',\n'
+      # SOCKS5 明文：sing-box socks inbound 无 tls 字段（唯一非 TLS 协议）
+      proto_socks_inbound "$port_socks" "$user_socks" "$pass_socks"
+      first=0
+    fi
+    # 兜底：active 已在函数开头校验非空，此处仅防御性判断
     if [[ $first -eq 1 ]]; then
       error "当前 sing-box 版本 ($sb_ver) 不支持任何已适配协议，请升级内核"
       return 1
@@ -85,15 +128,24 @@ config_gen() {
   chmod 600 "$SB_CONF"; chown root:root "$SB_CONF" 2>/dev/null || true
 
   # 状态文件（节点 URI 生成依赖，权限 600）
+  # PROTOS 保存"用户选择的字母串"（而非生效集）：内核降/升级后仍保留用户意图，
+  # 未适配协议的参数也一并保留，切回支持的高版本时自动恢复生成。
+  # 未显式指定 protos 时回写为内核支持的全部（兼容旧 .state 与直接调用）。
+  local protos_save=$protos
+  [[ -n "$protos_save" ]] || protos_save=$(core_supported_protos "$sb_ver" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' ')
   cat > "$SB_STATE" <<EOF
 DOMAIN=$domain
+PROTOS=$protos_save
 PORT_ANYTLS=$port_any
 PORT_HY2=$port_hy2_node
 PORT_HY2_LISTEN=$port_hy2
 PORT_TUIC=$port_tuic
+PORT_SOCKS=$port_socks
 PASS_ANYTLS=$pass_any
 PASS_HY2=$pass_hy2
 PASS_TUIC=$pass_tuic
+USER_SOCKS=$user_socks
+PASS_SOCKS=$pass_socks
 UUID_TUIC=$uuid_tuic
 OBS_HY2=$obfs_hy2
 HOP_HY2=$hop_hy2
@@ -122,11 +174,15 @@ EOF
       sed -i '/^HOP_HY2=/d' "$SB_STATE" 2>/dev/null || true
     fi
   fi
-  ok "config.json 已生成并通过 sing-box check"
-  # 提示被裁剪的协议（仅当前内核不支持的），避免用户误以为配置丢失
-  if [[ " $supported " != *" anytls "* || " $supported " != *" hysteria2 "* || " $supported " != *" tuic "* ]]; then
-    warn "当前内核 v${sb_ver} 未适配以下协议（config.json 未生成，.state 已保留其配置）：$(for p in anytls hysteria2 tuic; do [[ " $supported " == *" $p "* ]] || echo -n " $p"; done)"
-    warn "切换回支持这些协议的高版本内核（选项 7）时，会自动按 .state 恢复并生成节点"
+  ok "config.json 已生成并通过 sing-box check（已启用: $(core_protos_human "$(echo "$active" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' ')")）"
+  # 提示"已选择但当前内核不支持"的协议（用户主动未选的不提示），避免误以为配置丢失
+  local missing=""
+  for p in $chosen; do
+    [[ " $active " == *" $p "* ]] || missing="$missing $(core_proto_display "$p")"
+  done
+  if [[ -n "$missing" ]]; then
+    warn "以下协议已被选择但当前内核 v${sb_ver} 未适配，未生成 inbound 与节点：${missing}"
+    warn "其配置仍保留在 .state，切换回支持这些协议的高版本内核（选项 7）时自动恢复"
   fi
 }
 
@@ -140,6 +196,37 @@ _config_credential_ok() {
   [[ "$v" =~ ^[A-Za-z0-9!@#%^*_+=~.,:-]+$ ]]
 }
 
+# 交互选择要启用的协议（字母编号，可组合），输出字母串（如 "bc"）。
+# 参数：默认已选的字母串（可为空）。至少选择一个，空输入会要求重输。
+# 供 sb_install 与 config_change 共用，保证两处交互一致。
+config_pick_protos() {
+  local def=${1:-} in picked=""
+  echo "选择要启用的协议（输入字母组合，如 bc = Hysteria2 + TUIC）："
+  local l p name
+  for p in anytls hysteria2 tuic socks; do
+    l=$(core_proto_letter "$p"); name=$(core_proto_display "$p")
+    case "$p" in
+      anytls)    printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "加密(强制 TLS)" ;;
+      hysteria2) printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" ;;
+      tuic)      printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" ;;
+      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "明文(sing-box socks 无 tls 字段)" ;;
+    esac
+  done
+  while [[ -z "$picked" ]]; do
+    in=$(core_prompt "启用哪些协议(abcd 可组合)" "$def")
+    picked=$(core_protos_from_letters "$in")
+    [[ -n "$picked" ]] || warn "请至少输入一个有效字母（a/b/c/d），例如 bc"
+  done
+  info "已选择: $(core_protos_human "$in")"
+  # 选择 SOCKS5 时明确告警（唯一非 TLS 协议）
+  if [[ " $picked " == *" socks "* ]]; then
+    warn "SOCKS5 为明文协议（sing-box socks inbound 不支持 TLS），握手与目标地址可被链路识别。"
+    warn "已默认生成随机用户名与密码；若留空将关闭认证，等同开放代理，极易被扫描滥用。"
+  fi
+  # 回显字母串（规范化：仅保留有效字母并按 abcd 排序）
+  core_protos_from_letters "$in" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' '
+}
+
 # 变更代理配置（主页面选项 2）
 config_change() {
   if [[ ! -f "$SB_CONF" ]]; then
@@ -148,15 +235,45 @@ config_change() {
   fi
   [[ -f "$SB_STATE" ]] && set -a && . "$SB_STATE" && set +a
 
-  local domain port_any port_hy2 port_tuic pass_any pass_hy2 pass_tuic uuid_tuic obfs hop
+  # 先让用户选择启用哪些协议（字母编号，如 bc = Hysteria2 + TUIC）
+  local protos; protos=$(config_pick_protos "${PROTOS:-}")
+  [[ -n "$protos" ]] || return 1
+  local chosen; chosen=$(core_protos_from_letters "$protos")
+
+  local domain port_any="" port_hy2="" port_tuic="" port_socks="" \
+        pass_any pass_hy2 pass_tuic uuid_tuic user_socks="" pass_socks="" obfs hop
   domain=$(core_prompt "节点域名" "${DOMAIN:-}")
-  port_any=$(core_prompt "AnyTLS 端口" "${PORT_ANYTLS:-$(core_rand_port)}")
-  port_hy2=$(core_prompt "Hysteria2 端口" "${PORT_HY2:-$(core_rand_port)}")
-  port_tuic=$(core_prompt "TUIC 端口" "${PORT_TUIC:-$(core_rand_port)}")
-  pass_any=$(core_prompt  "AnyTLS 密码" "${PASS_ANYTLS:-$(core_rand_pass)}")
-  pass_hy2=$(core_prompt  "Hysteria2 密码" "${PASS_HY2:-$(core_rand_pass)}")
-  pass_tuic=$(core_prompt "TUIC 密码" "${PASS_TUIC:-$(core_rand_pass)}")
-  uuid_tuic=$(core_prompt "TUIC UUID" "${UUID_TUIC:-$(core_rand_uuid)}")
+  # 仅询问已选协议的参数；未选中的端口留空（config_gen 会跳过其 inbound 与校验）
+  if [[ " $chosen " == *" anytls "* ]]; then
+    port_any=$(core_prompt "AnyTLS 端口" "${PORT_ANYTLS:-$(core_rand_port)}")
+    pass_any=$(core_prompt "AnyTLS 密码" "${PASS_ANYTLS:-$(core_rand_pass)}")
+  else
+    pass_any="${PASS_ANYTLS:-$(core_rand_pass)}"
+  fi
+  if [[ " $chosen " == *" hysteria2 "* ]]; then
+    port_hy2=$(core_prompt "Hysteria2 端口" "${PORT_HY2:-$(core_rand_port)}")
+    pass_hy2=$(core_prompt "Hysteria2 密码" "${PASS_HY2:-$(core_rand_pass)}")
+  else
+    pass_hy2="${PASS_HY2:-$(core_rand_pass)}"
+  fi
+  if [[ " $chosen " == *" tuic "* ]]; then
+    port_tuic=$(core_prompt "TUIC 端口" "${PORT_TUIC:-$(core_rand_port)}")
+    pass_tuic=$(core_prompt "TUIC 密码" "${PASS_TUIC:-$(core_rand_pass)}")
+    uuid_tuic=$(core_prompt "TUIC UUID" "${UUID_TUIC:-$(core_rand_uuid)}")
+  else
+    pass_tuic="${PASS_TUIC:-$(core_rand_pass)}"
+    uuid_tuic="${UUID_TUIC:-$(core_rand_uuid)}"
+  fi
+  if [[ " $chosen " == *" socks "* ]]; then
+    port_socks=$(core_prompt "SOCKS5 端口" "${PORT_SOCKS:-$(core_rand_port)}")
+    # 默认随机用户名/密码；两者任一留空 = 关闭认证（不推荐，等同开放代理）
+    user_socks=$(core_prompt "SOCKS5 用户名(留空=关闭认证，不推荐)" "${USER_SOCKS:-$(core_rand_user)}")
+    pass_socks=$(core_prompt "SOCKS5 密码(留空=关闭认证)" "${PASS_SOCKS:-$(core_rand_pass)}")
+  else
+    # 未选 SOCKS5：保留原认证配置（下次启用时恢复），端口留空跳过 inbound
+    user_socks="${USER_SOCKS:-}"
+    pass_socks="${PASS_SOCKS:-}"
+  fi
   obfs=$(core_prompt "Hysteria2 obfs 密码(留空关闭)" "${OBS_HY2:-}")
   hop=$(core_prompt "Hysteria2 端口跳跃段(如 50001-51000，留空关闭)" "${HOP_HY2:-}")
 
@@ -167,7 +284,9 @@ config_change() {
   for _item in "AnyTLS 密码:$pass_any" \
                "Hysteria2 密码:$pass_hy2" \
                "TUIC 密码:$pass_tuic" \
-               "Hysteria2 obfs:$obfs"; do
+               "Hysteria2 obfs:$obfs" \
+               "SOCKS5 用户名:$user_socks" \
+               "SOCKS5 密码:$pass_socks"; do
     _name=${_item%%:*}; _val=${_item#*:}
     if ! _config_credential_ok "$_val"; then
       error "$_name 含非法字符（仅允许字母、数字与 !@#%^*_+=~.,:- ，不能含空格/引号/反斜杠/\$/反引号）"
@@ -182,7 +301,8 @@ config_change() {
   fi
 
   config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
-             "$pass_any" "$pass_hy2" "$pass_tuic" "$uuid_tuic" "$obfs" "$hop"
+             "$pass_any" "$pass_hy2" "$pass_tuic" "$uuid_tuic" "$obfs" "$hop" \
+             "$protos" "$port_socks" "$user_socks" "$pass_socks"
   service_reload
   ok "代理配置已变更并 reload"
   node_gen
@@ -201,7 +321,8 @@ config_rebuild_from_state() {
   [[ -f "$SB_CONF" ]] && cp -f "$SB_CONF" "$bak" 2>/dev/null || true
   if config_gen "$DOMAIN" "$PORT_ANYTLS" "$PORT_HY2" "$PORT_TUIC" \
                 "$PASS_ANYTLS" "$PASS_HY2" "$PASS_TUIC" "$UUID_TUIC" \
-                "$OBS_HY2" "$HOP_HY2"; then
+                "$OBS_HY2" "$HOP_HY2" "$PROTOS" "$PORT_SOCKS" \
+                "$USER_SOCKS" "$PASS_SOCKS"; then
     rm -f "$bak" 2>/dev/null || true
     return 0
   fi

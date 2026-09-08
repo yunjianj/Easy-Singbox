@@ -105,10 +105,16 @@ diag_collect() {
       set +u
       . "$SB_STATE" 2>/dev/null || true
       echo "--- 按协议逐个核对 ---"
-      # 裁剪协议后，未适配的协议不会生成 inbound（端口本就不该监听），
-      # 若按"未监听"标注会误导排查方向——此处显式区分"未适配"与"未监听"。
-      local _sup
+      # 生效集 = 用户选择(PROTOS) ∩ 内核支持，与 config_gen 一致。
+      # 未启用/未适配的协议不会生成 inbound（端口本就不该监听），
+      # 若按"未监听"标注会误导排查方向——此处显式区分"未启用"与"未监听"。
+      local _sup _chosen _act="" _p
       _sup=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
+      if [[ -n "${PROTOS:-}" ]]; then _chosen=$(core_protos_from_letters "$PROTOS"); else _chosen="$_sup"; fi
+      for _p in $_chosen; do
+        if core_proto_supported "$_p" "$(core_sb_ver 2>/dev/null || echo 1.13)"; then _act="$_act $_p"; fi
+      done
+      _sup="${_act# }"
       # ss 缺失时不再直接放弃核对：core_listening_ports 已内置 /proc/net 回退，
       # 仅在回退也拿不到任何端口时才提示安装（避免把"无法探测"误报为"未监听"）
       if ! command -v ss >/dev/null 2>&1 && [[ -z "$(core_listening_ports)" ]]; then
@@ -126,7 +132,7 @@ diag_collect() {
           echo "AnyTLS    tcp/${PORT_ANYTLS:-?} : [异常] 未监听 → 客户端必然报 connection refused"
         fi
       else
-        echo "AnyTLS    tcp/${PORT_ANYTLS:-?} : 未适配（当前内核版本不支持，未生成 inbound）"
+        echo "AnyTLS    tcp/${PORT_ANYTLS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
       if [[ " $_sup " == *" hysteria2 "* ]]; then
         if diag_port_listening udp "${PORT_HY2_LISTEN:-${PORT_HY2:-0}}"; then
@@ -135,7 +141,7 @@ diag_collect() {
           echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : [异常] 未监听"
         fi
       else
-        echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : 未适配（当前内核版本不支持，未生成 inbound）"
+        echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
       if [[ " $_sup " == *" tuic "* ]]; then
         if diag_port_listening udp "${PORT_TUIC:-0}"; then
@@ -144,7 +150,19 @@ diag_collect() {
           echo "TUIC      udp/${PORT_TUIC:-?} : [异常] 未监听"
         fi
       else
-        echo "TUIC      udp/${PORT_TUIC:-?} : 未适配（当前内核版本不支持，未生成 inbound）"
+        echo "TUIC      udp/${PORT_TUIC:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
+      fi
+      if [[ " $_sup " == *" socks "* ]]; then
+        if diag_port_listening tcp "${PORT_SOCKS:-0}"; then
+          echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
+          if [[ -z "${USER_SOCKS:-}" || -z "${PASS_SOCKS:-}" ]]; then
+            echo "           └ [风险] 未设置用户名/密码 = 开放代理，任何人可直接使用，请尽快启用认证"
+          fi
+        else
+          echo "SOCKS5    tcp/${PORT_SOCKS:-?} : [异常] 未监听"
+        fi
+      else
+        echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
     ) || true
   fi
