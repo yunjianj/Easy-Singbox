@@ -173,32 +173,24 @@ cert_install_files() {
   service_grant_conf
 }
 
-# 检查 acme.sh 是否已持有该域名的有效（未到期）ECC 证书。
-# 返回 0=存在且可用（证书目录完整）；1=不存在/不完整（需签发）。
+# 检查 acme.sh 是否已持有该域名可用的（未临近到期）证书。
+# 返回 0=存在且可用（复用）；1=不存在/不可用（需签发）。
 # 场景：重装/换验证方式时卸载保留了 acme.sh 账户与证书，acme.sh --issue 会因
 # "Domains not changed. Skipping." 跳过（退出码非零）——脚本此前误判为签发失败。
-# 判断依据：acme.sh 数据目录 $ACME_HOME/<domain>_ecc/ 存在且 fullchain.cer/key 齐备。
-# 到期判断不依赖 --list 文本解析（多版本输出不一），直接读 conf 中的
-# Le_NextRenewTimeStr（秒级时间戳）与当前时间比较；conf 缺失/解析失败则保守按
-# "需重新签发"处理（避免把过期证书当有效用）。
+# 判断依据：证书文件齐全 + openssl 校验剩余有效期。
+# 注意：acme.sh conf 的 Le_NextRenewTimeStr 在不同版本存"秒级时间戳"或 RFC3339
+# 日期串（_time2str 输出），文本解析不可靠——故直接读证书本身（openssl -checkend，
+# 剩余 >7 天即视为可用；剩余不足则 acme.sh 已进入续期窗口，让其正常 --issue）。
 cert_has_valid() {
-  local domain=$1 d conf renew_ts now
-  # 域名中的 * 与通配符在 acme.sh 目录中按字面保留，路径为 $ACME_HOME/<domain>_ecc
+  local domain=$1 d cert
   d=$(printf '%s' "$domain" | tr -d '/')
   [[ -n "$d" ]] || return 1
-  [[ -f "$ACME_HOME/${d}_ecc/fullchain.cer" ]] || return 1
+  cert="$ACME_HOME/${d}_ecc/fullchain.cer"
+  [[ -f "$cert" ]] || return 1
   [[ -f "$ACME_HOME/${d}_ecc/${d}.key" ]] || return 1
-  conf="$ACME_HOME/${d}_ecc/${d}.conf"
-  [[ -f "$conf" ]] || return 1
-  # acme.sh 的 _save_conf 写配置为 key='value' 带单引号（如 Le_NextRenewTimeStr='1700...'），
-  # 正则需容忍可选引号；值本身是秒级时间戳（_time2str 生成），提取数字后比较。
-  renew_ts=$(sed -n "s/^Le_NextRenewTimeStr=['\"]\?\([0-9][0-9]*\)['\"]\?.*/\1/p" "$conf" 2>/dev/null | head -1)
-  if [[ -z "$renew_ts" || ! "$renew_ts" =~ ^[0-9]+$ ]]; then
-    return 1   # 无法确认续期时间，保守需重签
-  fi
-  now=$(date +%s)
-  # 若下一次续期时间在未来，说明证书仍在有效期内（acme.sh 会在到期前约 60 天续期）
-  (( renew_ts > now )) || return 1
+  # openssl 为 acme.sh 硬依赖（cert_install_acme 已保证存在）。
+  # -checkend N：证书在 N 秒内到期则返回非 0；剩余 >7 天视为可复用。
+  openssl x509 -checkend 604800 -noout -in "$cert" >/dev/null 2>&1 || return 1
   return 0
 }
 
