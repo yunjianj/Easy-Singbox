@@ -173,16 +173,53 @@ cert_install_files() {
   service_grant_conf
 }
 
-# HTTP-01 签发（standalone 需要 80 空闲）
+# 检查 acme.sh 是否已持有该域名的有效（未到期）ECC 证书。
+# 返回 0=存在且可用（证书目录完整）；1=不存在/不完整（需签发）。
+# 场景：重装/换验证方式时卸载保留了 acme.sh 账户与证书，acme.sh --issue 会因
+# "Domains not changed. Skipping." 跳过（退出码非零）——脚本此前误判为签发失败。
+# 判断依据：acme.sh 数据目录 $ACME_HOME/<domain>_ecc/ 存在且 fullchain.cer/key 齐备。
+# 到期判断不依赖 --list 文本解析（多版本输出不一），直接读 conf 中的
+# Le_NextRenewTimeStr（秒级时间戳）与当前时间比较；conf 缺失/解析失败则保守按
+# "需重新签发"处理（避免把过期证书当有效用）。
+cert_has_valid() {
+  local domain=$1 d conf renew_ts now
+  # 域名中的 * 与通配符在 acme.sh 目录中按字面保留，路径为 $ACME_HOME/<domain>_ecc
+  d=$(printf '%s' "$domain" | tr -d '/')
+  [[ -n "$d" ]] || return 1
+  [[ -f "$ACME_HOME/${d}_ecc/fullchain.cer" ]] || return 1
+  [[ -f "$ACME_HOME/${d}_ecc/${d}.key" ]] || return 1
+  conf="$ACME_HOME/${d}_ecc/${d}.conf"
+  [[ -f "$conf" ]] || return 1
+  renew_ts=$(grep -oE '^Le_NextRenewTimeStr=[0-9]+' "$conf" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+  if [[ -z "$renew_ts" || ! "$renew_ts" =~ ^[0-9]+$ ]]; then
+    return 1   # 无法确认续期时间，保守需重签
+  fi
+  now=$(date +%s)
+  # 若下一次续期时间在未来，说明证书仍在有效期内（acme.sh 会在到期前约 60 天续期）
+  (( renew_ts > now )) || return 1
+  return 0
+}
+
+# HTTP-01 签发（standalone 需要 80 空闲）。参数：domain [force]；force=1 时强制重签。
 cert_issue_http01() {
-  local domain=$1
+  local domain=$1 force=${2:-0}
   [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
   mkdir -p "$SB_DIR_SSL"
+  # 重装场景：非 force 且 acme.sh 已持有同域名有效证书时直接复用，
+  # 避免 --issue 因 "Domains not changed. Skipping." 跳过而被误判失败
+  if [[ "$force" != "1" ]] && cert_has_valid "$domain"; then
+    info "acme.sh 已持有 $domain 的有效证书，直接安装复用"
+    cert_install_files "$domain"
+    ok "HTTP-01 证书已安装到 $SB_DIR_SSL（复用既有证书）"
+    return 0
+  fi
   # 探测防火墙后端，并临时放行 80（即使端口策略选了 2/3，签发阶段也需 80 可达）
   fw_detect
   fw_open_http_temp
   info "HTTP-01 签发中（需 80 端口对外可达）: $domain"
-  if ! "$ACME_HOME/acme.sh" --issue -d "$domain" --standalone --keylength ec-256 --server letsencrypt --accountemail no@eff.org; then
+  local args=(--issue -d "$domain" --standalone --keylength ec-256 --server letsencrypt --accountemail no@eff.org)
+  [[ "$force" == "1" ]] && args+=(--force)
+  if ! "$ACME_HOME/acme.sh" "${args[@]}"; then
     fw_close_http_temp
     error "HTTP-01 签发失败：请确认域名 A 记录指向本机且 80 端口对外可达"
     return 1
@@ -192,17 +229,27 @@ cert_issue_http01() {
   ok "HTTP-01 证书已签发并安装到 $SB_DIR_SSL"
 }
 
-# DNS-01(Cloudflare) 签发（无需 80）
+# DNS-01(Cloudflare) 签发（无需 80）。参数：domain token [force]；force=1 时强制重签。
 cert_issue_dns01_cf() {
-  local domain=$1 token=$2
+  local domain=$1 token=$2 force=${3:-0}
   [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
   mkdir -p "$SB_DIR_SSL"
-  # 持久化 CF_Token 以便续期（权限 600，仅本机）
+  # 持久化 CF_Token 以便续期（权限 600，仅本机；复用/重签都需写入，acme.sh cron 依赖）
   printf 'CF_Token=%s\n' "$token" > "$SB_CF_ENV"
   chmod 600 "$SB_CF_ENV"; chown root:root "$SB_CF_ENV"
   export CF_Token="$token"
+  # 重装场景：非 force 且已持有同域名有效证书时复用（避免 --issue 跳过被误判失败）
+  if [[ "$force" != "1" ]] && cert_has_valid "$domain"; then
+    unset CF_Token
+    info "acme.sh 已持有 $domain 的有效证书，直接安装复用"
+    cert_install_files "$domain"
+    ok "DNS-01 证书已安装到 $SB_DIR_SSL（复用既有证书，CF Token 已持久化供续期）"
+    return 0
+  fi
   info "DNS-01(Cloudflare) 签发中: $domain"
-  if ! "$ACME_HOME/acme.sh" --issue -d "$domain" --dns dns_cf --keylength ec-256 --server letsencrypt --accountemail no@eff.org; then
+  local args=(--issue -d "$domain" --dns dns_cf --keylength ec-256 --server letsencrypt --accountemail no@eff.org)
+  [[ "$force" == "1" ]] && args+=(--force)
+  if ! "$ACME_HOME/acme.sh" "${args[@]}"; then
     unset CF_Token
     error "DNS-01 签发失败：请检查 Cloudflare API Token 是否正确且具有 Zone:DNS 编辑权限"
     return 1
@@ -244,11 +291,14 @@ cert_change() {
   echo "  [1] HTTP-01（需 80 端口 + 域名 A 记录指向本机）"
   echo "  [2] DNS-01 Cloudflare（需 CF API Token）"
   mode=$(core_prompt "选择验证方式" "1")
+  # 选项 3 语义 = 变更/重签：force=1 强制 acme.sh 重新签发（即使同域名已有有效证书），
+  # 与"安装复用既有证书"（sb_install 默认行为）相区分。签发失败必须中止并返回非零，
+  # 不能静默继续（否则下方提示"已变更"但实际证书没更新）。
   if [[ "$mode" == "2" ]]; then
     token=$(core_prompt "Cloudflare API Token")
-    cert_issue_dns01_cf "$domain" "$token"
+    cert_issue_dns01_cf "$domain" "$token" 1 || return 1
   else
-    cert_issue_http01 "$domain"
+    cert_issue_http01 "$domain" 1 || return 1
   fi
   # 更新 state 中的域名：不经 sed（域名已校验，字符集内无元字符），
   # 覆盖式重建文件——保留其它字段行、替换 DOMAIN 行，同目录 tmp + mv 原子写入。
