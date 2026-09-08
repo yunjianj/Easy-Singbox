@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.4.0"
+SB_SCRIPT_VERSION="1.5.0"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -37,14 +37,28 @@ source "$SB_DIR/lib/diag.sh"
 source "$SB_DIR/lib/bbrfq.sh"
 
 # ---------- sing-box 下载/安装 ----------
+# 获取本脚本适配的基线大版本（SB_VER_BASE）下最新的 patch 版本号（如 1.14.3）。
+# 从 GitHub Releases 列表过滤 v<base>.* 前缀的最新 tag；无网络/API 失败返回非零。
 sb_latest_version() {
-  local tag
-  tag=$(curl -s --max-time 15 https://api.github.com/repos/SagerNet/sing-box/releases/latest \
-    | tr ',' '\n' | grep '"tag_name"' | head -1 \
-    | sed -E 's/.*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  tag=${tag#v}
-  [[ -z "$tag" ]] && return 1
-  echo "$tag"
+  local base="$SB_VER_BASE" tag best=""
+  # 一次拉取最近 N 个 release，取与基线大版本匹配且最新的
+  while IFS= read -r t; do
+    t=${t#v}
+    case "$t" in
+      "${base}."* | "${base}")  # 1.14.0 / 1.14 等均属于基线大版本
+        # 仅接受纯数字补丁（排除 1.14.0-beta1 等预发布：其语义低于正式版，
+        # 且我们按 release 顺序取第一个命中即为最新正式 patch）
+        if [[ "$t" =~ ^${base//./\\.}\.[0-9]+$ ]]; then
+          best=$t
+          break
+        fi
+        ;;
+    esac
+  done < <(curl -s --max-time 20 \
+      "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" \
+      | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' || true)
+  [[ -n "$best" ]] || return 1
+  echo "$best"
 }
 
 sb_download() {
@@ -191,9 +205,9 @@ sb_install() {
   fi
 
   local arch; arch=$(core_detect_arch)
-  local ver; ver=${SB_VERSION_OVERRIDE:-$(sb_latest_version)}
+  local ver; ver=$(sb_latest_version)
   if [[ -z "$ver" ]]; then
-    error "无法获取 sing-box 最新版本（可能网络受限或 GitHub API 不可达）。可指定版本重试：bash install.sh --version 1.13.0"
+    error "无法获取 sing-box ${SB_VER_BASE}.x 最新版本（可能网络受限或 GitHub API 不可达）"
     return 1
   fi
   # 开始安装前统一检测并安装基础依赖（curl/openssl/iproute2/iptables-nft），幂等
@@ -414,44 +428,52 @@ sb_uninstall() {
   ok "卸载完成"
 }
 
-# ---------- 版本切换（选项 7）----------
+# ---------- 内核升级（选项 7）----------
+# v1.5.0 起仅保留"升级"（无手动切换版本）：脚本只适配基线大版本 SB_VER_BASE（1.14），
+# 一键升级到该大版本的最新 patch；若已装版本低于基线大版本（如旧 1.13）也会一并升到基线最新。
 sb_version_menu() {
   core_root_check
   [[ -x "$SB_BIN" ]] || { error "尚未安装 sing-box"; return 1; }
+
+  # 版本支持检测：脚本适配的内核基线大版本
+  info "本脚本适配 sing-box ${SB_VER_BASE}.x 内核（所有协议均按此大版本语法编写）"
   local latest; latest=$(sb_latest_version)
-  info "最新版本: v$latest"
-  local ver; ver=$(core_prompt "要切换到的版本（如 1.13.0，留空=最新）" "$latest")
-  [[ -z "$ver" ]] && ver=$latest
-  if [[ -z "$ver" ]]; then
-    error "未获取到版本号，无法切换"; return 1
+  if [[ -z "$latest" ]]; then
+    error "无法获取 sing-box ${SB_VER_BASE}.x 最新版本（网络受限或 GitHub API 不可达），升级中止"
+    return 1
   fi
+
+  local cur; cur=$(core_sb_ver 2>/dev/null) || cur=""
+  if [[ -z "$cur" ]]; then
+    error "无法探测当前 sing-box 版本"
+    return 1
+  fi
+
+  # 已是最新补丁则无需升级
+  if core_ver_ge "$cur" "$latest"; then
+    ok "当前已是最新版本 v$cur（${SB_VER_BASE}.x 最新为 v$latest），无需升级"
+    return 0
+  fi
+
+  info "当前 v$cur → 将升级至 v$latest"
+  if ! core_prompt_yn "确认升级内核？"; then
+    info "已取消"; return 0
+  fi
+
   local arch; arch=$(core_detect_arch)
-  # 切换前记录旧版本与其大版本族，用于切换后判断是否需要按新内核语法重建配置
-  local old_ver old_fam
-  old_ver=$(core_sb_ver 2>/dev/null) || old_ver=""
-  old_fam=$(core_ver_family "$old_ver") || old_fam=""
   if [[ -f "$SB_BIN" ]]; then cp -f "$SB_BIN" "${SB_BIN}.bak" 2>/dev/null || true; fi
-  if sb_download "$ver" "$arch"; then
-    local new_fam; new_fam=$(core_ver_family "$ver") || new_fam=""
-    # 大版本族变化（如 1.13.x -> 1.14.x 或反向降级）时，旧 config.json 的语法
-    # 可能不被新内核接受（1.13 严格拒绝 1.14 新增字段）；自动用 .state 中的
-    # 既有参数按新内核语法重建配置，代理参数保持不变。
-    if [[ -n "$old_fam" && -n "$new_fam" && "$old_fam" != "$new_fam" ]]; then
-      info "检测到大版本切换 v$old_ver -> v$ver（$old_fam -> $new_fam），自动按新内核语法重建配置..."
-      if config_rebuild_from_state; then
-        ok "配置已按 v$ver 语法自动重建（代理参数保持不变）"
-        # 重建后按新内核裁剪协议重新生成节点：切到旧内核时未适配协议不输出节点，
-        # 切回适配的高版本内核时恢复输出（nodes.txt 同步刷新，避免残留旧 URI）。
-        node_gen || true
-      else
-        warn "配置自动重建失败，已回滚原配置；可执行选项 2 手动变更代理配置"
-      fi
+  if sb_download "$latest" "$arch"; then
+    # 升级后把存量配置平滑重建为基线语法（幂等；对旧脚本版本生成的 1.13 语法
+    # 配置尤其必要，避免新内核以旧语法文件带病运行），并刷新节点。
+    if config_rebuild_from_state; then
+      ok "配置已按基线语法（${SB_VER_BASE}.x）重建，代理参数保持不变"
+      node_gen || true
     fi
     service_reload
-    ok "已切换至 v$ver（旧版本备份: ${SB_BIN}.bak，可手动恢复）"
+    ok "已升级至 v$latest（旧版本备份: ${SB_BIN}.bak，可手动恢复）"
   else
     [[ -f "${SB_BIN}.bak" ]] && mv -f "${SB_BIN}.bak" "$SB_BIN"
-    error "下载失败，已回滚到原版本"
+    error "升级失败，已回滚到原版本 v$cur"
   fi
 }
 
@@ -568,6 +590,11 @@ sb_show_menu() {
     [[ -n "$line" ]] && echo "             $line"
   done <<< "$ipregion"
   echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
+  # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
+  if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
+     && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
+    echo -e "             ${C_RED}[内核版本过低：本脚本需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级]${C_RST}"
+  fi
   case "$vstat" in
     latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
     update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_RED}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
@@ -584,7 +611,7 @@ sb_show_menu() {
   echo " [4] 启动 Sing-Box"
   echo " [5] 停止 Sing-Box"
   echo " [6] 重启 / 查看节点   (reload + 打印节点)"
-  echo " [7] 更新 / 切换内核版本"
+  echo " [7] 升级内核版本        (适配 sing-box ${SB_VER_BASE}.x，升到最新补丁)"
   echo " [8] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
   echo " [9] 诊断与日志        (排查节点不通，生成可发送的报告)"
   echo " [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)"
@@ -636,12 +663,6 @@ main_menu() {
 }
 
 # 支持 install.sh exec 传入子命令（如 uninstall），否则进入主页面
-# 全局参数：--version X.Y.Z 锁定安装版本
-SB_VERSION_OVERRIDE=""
-if [[ "${1:-}" == "--version" ]]; then
-  SB_VERSION_OVERRIDE="${2:-}"
-  shift 2
-fi
 case "${1:-}" in
   uninstall)      sb_uninstall ;;
   install)        sb_install ;;

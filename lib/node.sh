@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/node.sh — 节点 URI 生成
 # 严禁生成订阅链接。安装完成或选“查看节点”后打印已启用协议的 URI，写入 nodes.txt(600)。
-# 生效集 = 用户选择(PROTOS) ∩ 内核支持，与 config_gen 严格一致。
+# 生效集 = 用户选择(PROTOS)，与 config_gen 严格一致（v1.5.0 起无内核版本裁剪）。
 
 node_gen() {
   if [[ ! -f "$SB_STATE" ]]; then
@@ -11,21 +11,14 @@ node_gen() {
   set -a; . "$SB_STATE"; set +a
 
   local name="$DOMAIN"
-  # 生效集 = 用户选择(PROTOS) ∩ 内核支持，与 config_gen 的裁剪严格一致。
-  # 未选择或当前内核未适配的协议不生成 URI，其配置仍保留在 .state，
-  # 切回支持的高版本内核（或重新选上）后由 config_rebuild_from_state 恢复。
-  local sb_ver supported chosen active="" p
-  sb_ver=$(core_sb_ver 2>/dev/null) || sb_ver=""
-  supported=$(core_supported_protos "$sb_ver")
+  # 仅输出用户启用(PROTOS)的协议节点；未启用的协议不生成 URI，
+  # 其配置仍保留在 .state，重新选上后由 config_gen 恢复生成。
+  local active
   if [[ -n "${PROTOS:-}" ]]; then
-    chosen=$(core_protos_from_letters "$PROTOS")
+    active=$(core_protos_from_letters "$PROTOS")
   else
-    chosen="$supported"   # 旧 .state 无 PROTOS：沿用内核支持的全部
+    active=$(core_all_protos)   # 旧 .state 无 PROTOS：默认全部协议
   fi
-  for p in $chosen; do
-    if core_proto_supported "$p" "$sb_ver"; then active="$active $p"; fi
-  done
-  active="${active# }"
 
   local anytls_uri="" hy2_uri="" tuic_uri="" socks_uri=""
   if [[ " $active " == *" anytls "* ]]; then
@@ -140,7 +133,7 @@ JSON
     echo ""
   fi
   if [[ -z "$anytls_uri" && -z "$hy2_uri" && -z "$tuic_uri" && -z "$socks_uri" ]]; then
-    warn "当前未启用任何协议（已选: ${PROTOS:-未指定}，内核 v${sb_ver:-?}），未生成节点"
-    warn "可执行选项 2 重新选择协议，或选项 7 升级内核以启用未适配协议"
+    warn "当前未启用任何协议（已选: ${PROTOS:-未指定}），未生成节点"
+    warn "可执行选项 2 重新选择协议"
   fi
 }

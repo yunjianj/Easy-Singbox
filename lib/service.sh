@@ -207,14 +207,8 @@ service_start_openrc() {
 # 客户端报 "connection refused" 的直接原因就是此处无监听，故安装/变更后必须显式校验。
 service_verify_ports() {
   local pa=$1 ph=$2 pt=$3 ps=${4:-} bad=0 tcp udp
-  # 只校验实际生成的端口：用户未选择的协议端口本身为空（调用方传入空串），
-  # 内核未适配的协议（如 1.13 下的 socks5）也不会生成 inbound。
-  # 两者都置空跳过，避免把"未启用/未适配"误报为"未监听"。
-  local supported; supported=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
-  [[ " $supported " == *" anytls "* ]] || pa=""
-  [[ " $supported " == *" hysteria2 "* ]] || ph=""
-  [[ " $supported " == *" tuic "* ]] || pt=""
-  [[ " $supported " == *" socks "* ]] || ps=""
+  # 只校验实际生成的端口：调用方仅传入启用协议的端口（未启用协议端口为空），
+  # 空端口参数自动跳过（v1.5.0 起无内核版本裁剪，内核恒为基线大版本 1.14.x）。
   if ! command -v ss >/dev/null 2>&1; then
     info "未安装 ss(iproute2)，尝试自动安装..."
     core_ensure_deps >/dev/null 2>&1 || true

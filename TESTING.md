@@ -61,10 +61,13 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 
 - [ ] 临时调短 acme.sh 续期间隔或手动 `acme.sh --renew-all`，确认 reloadcmd 执行 `systemctl reload sing-box` 且服务不中断
 
-## 8. 版本切换与回滚
+## 8. 内核升级与版本支持检测
 
-- [ ] 选项 7 切换到一个其他版本，服务正常
-- [ ] 切换失败时可从 `/usr/local/bin/sing-box.bak` 恢复
+- [ ] 主面板 Sing-Box 行显示已装内核版本，且为 1.14.x（基线达标无红字）
+- [ ] 选项 7 显示"已是最新版本，无需升级"（当前为 1.14.x 最新时）
+- [ ] 手动把 `/usr/local/bin/sing-box` 换成旧内核（如 1.13.x）后进入面板，出现红色「内核版本过低…请执行选项 7 升级」提示
+- [ ] 选项 7 一键升级：自动下载 1.14 大版本最新补丁（不可手动输入版本），服务正常，`sing-box check` 通过
+- [ ] 升级失败时可从 `/usr/local/bin/sing-box.bak` 恢复
 
 ## 9. 卸载
 

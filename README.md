@@ -27,7 +27,6 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 
 > 安装后脚本本体存放于 `/usr/local/share/easy-singbox`，管理命令 `sb` 软链到 `/usr/local/bin/sb`。卸载请另执行仓库内 `uninstall.sh`。
 
-
 - **强制 TLS（SOCKS5 除外）**：AnyTLS / Hysteria2 / TUIC v5 共享同一份真实证书，`tls.enabled` 均为 `true`，**不支持无证书模式、不支持手动上传证书**。**SOCKS5 例外（v1.4.0 起）**：sing-box 官方 socks inbound 不支持 TLS 字段，属明文协议——仅在明确选择启用时生成，默认强认证并显著告警。
 - **协议自选（v1.4.0 起）**：安装/变更时用字母编号选择启用哪些协议（如 `bc` = 仅 Hysteria2 + TUIC），未选中的不生成 inbound 与节点。
 - **不生成订阅链接**：安装完成后直接在终端打印已启用协议的节点 URI，并写入 `/etc/sing-box/nodes.txt`（权限 600）。
@@ -47,9 +46,8 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 > `ss` 缺失时端口监听校验自动改用 `/proc/net` 直读回退（零依赖），`iptables` 缺失时端口跳跃不启用。
 > Alpine 3.21+ 的 `ss` 位于独立子包 `iproute2-ss`，脚本会自动补装；手动安装可用 `apk add iproute2 iproute2-ss`。
 
-- `sing-box`（从 GitHub Releases 下载最新 stable，要求 ≥ 1.13，下载后比对 GitHub Release API 官方 digest（sha256），校验失败即拒绝安装）
-- **1.13 / 1.14 配置语法自动适配（v1.3.0 起）**：生成 `config.json` 前自动探测内核大版本——1.13 分支输出原语法；1.14+ 分支额外启用新增的 TLS `handshake_timeout`（8s）等字段，两分支互不覆盖。实测 1.13.0 与 1.14.0 官方二进制对各自分支的 `check` 均通过。**大版本切换自动重建（v1.3.1 起）**：选项 7 更新/切换内核时，若大版本族发生变化（如 1.13 → 1.14 或反向降级），自动读取 `.state` 中的既有参数按新内核语法重建 `config.json`（代理参数保持不变），重建失败则回滚原配置；同大版本内更新（如 1.13.0 → 1.13.1）不触碰配置。
-- **协议按内核版本动态裁剪（v1.3.3 起）**：每个协议登记其最低适配内核版本。新协议默认只适配最新版本（当前 1.14，如 SOCKS5）；切到旧内核时，尚未适配该内核的协议不会生成 inbound 与节点（`config.json` 不含、不输出 URI），但其参数保留在 `.state`，切回支持它的高版本内核时自动恢复并重新生成节点。详见 `DEVELOPMENT.md`。
+- `sing-box`（从 GitHub Releases 下载，**只适配 1.14.x 内核**（v1.5.0 起单一基线；安装/升级自动取 1.14 大版本下最新补丁，不再支持手动切换其它大版本），下载后比对 GitHub Release API 官方 digest（sha256），校验失败即拒绝安装）
+- **内核基线（v1.5.0 起）**：本脚本只适配 sing-box **1.14.x**（`SB_VER_BASE=1.14`）。所有协议一律按该大版本的最新稳定内核语法编写，**无多版本语法分支、无按版本裁剪协议**。主面板会做版本支持检测：已装内核低于 1.14 时红字提示，执行选项 7 一键升级到 1.14.x 最新即可。历史上 1.13/1.14 双分支（v1.3.0）、大版本切换自动重建（v1.3.1）、按版本裁剪协议（v1.3.3）等机制已随 v1.5.0 移除。详见 `DEVELOPMENT.md`。
 - `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
 - `ncurses`（可选，提供 `tput` 彩色输出；缺失时静默降级为无色，不影响功能。Alpine 上安装：`apk add ncurses`）
 
@@ -64,7 +62,6 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 
 - AnyTLS / Hysteria2 / TUIC 共用同一份 TLS 证书，由证书模块统一签发到 `/etc/sing-box/ssl/`。
 - 输入编号组合即可启用部分协议（如 `bc` 仅启用 Hysteria2 + TUIC）；SOCKS5 是唯一不受强制 TLS 约束的协议，启用前会显著告警，默认生成随机用户名/密码，留空即关闭认证（**等同开放代理，不推荐**）。
-- **SOCKS5 与内核版本**：按约定默认只适配最新版（当前 1.14），切到 1.13 时该协议不生成节点但配置保留，切回后自动恢复（见 `DEVELOPMENT.md`）。
 
 ## 两种证书模式
 
@@ -97,7 +94,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.4.0
+      easy-singbox  管理面板  v1.5.0
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -107,7 +104,8 @@ sb
              IPv4 1.2.3.4  |  中国/香港 / HKBN
              IPv6 2001:db8::1  |  日本/东京 / 某ISP
  Sing-Box  : 已运行  v1.14.0  (2 协议在线)
- 脚本版本  : v1.4.0  [已是最新]
+             [内核 1.14.x 已达标]
+ 脚本版本  : v1.5.0  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -115,8 +113,8 @@ sb
  [4] 启动 Sing-Box
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
- [7] 更新 / 切换内核版本
- [8] 更新脚本            (当前 v1.4.0)
+ [7] 升级内核版本        (适配 sing-box 1.14.x，升到最新补丁)
+ [8] 更新脚本            (当前 v1.5.0)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
  [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)
  [0] 退出
@@ -158,7 +156,7 @@ sb log        # 直接查看最近 200 行服务日志
 ## 卸载与更新
 
 - **卸载**：主页面选项 1（已安装时变为卸载），或独立执行 `bash uninstall.sh`。会二次确认是否一并删除证书目录与 acme.sh 账户。
-- **切换版本**：选项 7，下载指定版本前备份当前二进制（`/usr/local/bin/sing-box.bak`），失败可手动恢复。下载的二进制强制比对 GitHub Release API 的官方 asset digest（sha256；该 release 本身不附带 `checksums.sha256`），校验失败打印期望/实际哈希并拒绝安装。
+- **升级内核（选项 7，v1.5.0 起仅升级、不可手动切换/降级）**：脚本只适配 1.14.x，选项 7 自动下载该大版本最新补丁，下载前备份当前二进制（`/usr/local/bin/sing-box.bak`），失败可手动恢复。下载的二进制强制比对 GitHub Release API 的官方 asset digest（sha256；该 release 本身不附带 `checksums.sha256`），校验失败打印期望/实际哈希并拒绝安装。升级成功后按基线语法重建存量配置并刷新节点。
 - **更新脚本**：选项 8，从 GitHub raw 官方源（`sb` 顶部 `SB_UPDATE_BASE`）拉取最新代码，保留本机 `/etc/sing-box/config.json` 与证书。覆盖本地前会先用 `cmp -s` 列出所有变更文件并要求确认，拒绝则本地不被改动。
 - **版本自检**：主面板标题与「脚本版本」行显示当前版本（`sb` 内 `SB_SCRIPT_VERSION` 常量），并自动对比仓库根 `VERSION` 文件——已最新显示绿色 `[已是最新]`，有新版本显示红色 `[发现新版本 vX，可执行选项 8 更新]`，检测失败（网络受限）显示黄色 `[远程版本未知]`。检测结果本地缓存 10 分钟，不会拖慢菜单。发布新版本时请同步修改 `SB_SCRIPT_VERSION` 与 `VERSION` 文件。
 
@@ -198,7 +196,7 @@ BBR 对 Hysteria2 / TUIC (QUIC) 和 AnyTLS (TCP) 流量均有显著加速效果�
 
 - **AnyTLS 客户端兼容性**：部分客户端不识别 `anytls://` URI，需使用 outbound JSON 兜底导入（见上）。
 - **SOCKS5 明文（v1.4.0 起）**：sing-box 官方 socks inbound **不支持 TLS**，为唯一不受强制 TLS 约束的协议。握手与目标地址明文可见，可能被链路识别/封锁；必须设置用户名密码，严禁无认证对外开放（等同开放代理）。仅按需启用。
-- **SOCKS5 内核版本**：默认仅适配 sing-box 1.14+，切到 1.13 时不生成其节点（配置保留，切回自动恢复）。
+
 - 降权运行以 `singbox` 系统用户执行；端口均为高位随机，无需 `CAP_NET_BIND_SERVICE`（systemd 单元已移除该 capability）。
 - DNS-01 仅支持 Cloudflare，其他 DNS 服务商本期未实现。
 - 自更新默认从 GitHub raw 官方源拉取（非 jsDelivr），网络受 GitHub 限制的区域需代理或手动更新。

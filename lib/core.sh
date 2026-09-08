@@ -184,37 +184,20 @@ core_ver_ge() {
   return 0
 }
 
-# 输出大版本族（major.minor，如 1.14），用于判断"大版本切换"（1.13 -> 1.14 等）。
-# 纯 shell 实现（兼容 busybox），去掉 -beta1/+build 与非法字符；
-# 空或无法解析的版本输出空并返回 1。
-core_ver_family() {
-  local v=$1 maj minor
-  [[ -n "$v" ]] || return 1
-  v=${v%%[-+]*}                    # 去掉 -beta1 / +build 后缀
-  v=${v//[^0-9.]/}                 # 只保留数字与点
-  maj=${v%%.*}; [[ -n "$maj" ]] || return 1
-  minor=${v#*.}; minor=${minor%%.*}
-  [[ -n "$minor" ]] || return 1
-  echo "$maj.$minor"
-}
+# ---------- 协议编号与内核基线 ----------
+# 本脚本适配的 sing-box 内核**基线大版本**（只考虑大版本，如 1.14）。
+# 约定（v1.5.0 起）：所有协议一律只按此大版本的最新内核语法编写/适配，
+# 不再支持多版本语法分支；安装/升级时只下载该大版本下的最新 patch。
+# 升级适配新的大版本内核时，同步修改此常量并重新验证全部协议配置语法。
+SB_VER_BASE="1.14"
 
-# ---------- 协议与内核版本适配 ----------
-# 当前 sing-box 最新稳定版本（用于"新协议默认只适配最新版本"约定）。
-# 发布新版本时同步更新此常量。
-SB_VER_LATEST="1.14"
-
-# 返回某协议的最低内核版本（major.minor）。
-# 约定（见 DEVELOPMENT.md）：新增协议默认只适配最新版本（返回 SB_VER_LATEST），
-# 仅当某协议确实向下兼容更旧内核时才在此显式下调最低版本。
-# 现有三协议均兼容 1.13（本项目要求 sing-box >= 1.13），故统一为 1.13；
-# socks 按约定登记为最新版（1.14）——切到 1.13 时不生成其节点，配置保留。
-core_proto_min_ver() {
-  local p=$1
-  case "$p" in
-    anytls|hysteria2|tuic) echo "1.13" ;;
-    socks) echo "$SB_VER_LATEST" ;;
-    *) echo "$SB_VER_LATEST" ;;
-  esac
+# 当前脚本支持的全部协议编号（按字母序给出），供默认启用与遍历用。
+core_all_protos() {
+  local p out=""
+  for p in anytls hysteria2 tuic socks; do
+    out="$out $p"
+  done
+  echo "${out# }"
 }
 
 # 协议名 -> 选择编号（安装/变更时让用户用字母自选启用哪些协议）
@@ -267,23 +250,6 @@ core_protos_human() {
     out="$out$(core_proto_display "$p") "
   done
   echo "${out% }"
-}
-
-# 判断协议 proto 是否被内核版本 cur_ver 支持（cur >= 该协议最低版本）。
-core_proto_supported() {
-  local p=$1 cur=$2 min
-  min=$(core_proto_min_ver "$p")
-  core_ver_ge "$cur" "$min"
-}
-
-# 输出当前内核版本适配的协议名列表（空格分隔）。
-# cur_ver 为空时按最低兼容版本（1.13）处理，保证探测失败也能生成现有三协议（与旧行为一致）。
-core_supported_protos() {
-  local cur=${1:-1.13} p out=""
-  for p in anytls hysteria2 tuic socks; do
-    if core_proto_supported "$p" "$cur"; then out="$out $p"; fi
-  done
-  echo "${out# }"
 }
 
 # 返回 "installed|running|version|proto_count"

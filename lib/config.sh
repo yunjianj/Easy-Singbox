@@ -5,36 +5,23 @@
 # domain port_any port_hy2 port_tuic pass_any pass_hy2 pass_tuic uuid_tuic [obfs_hy2] [hop_hy2]
 #        [protos] [port_socks] [user_socks] [pass_socks]
 # hop_hy2: Hysteria2 端口跳跃段（如 50001-51000），留空则不启用跳跃
-# protos: 用户选择启用的协议字母串（如 "bc"）；留空=当前内核支持的全部（兼容旧 .state）
+# protos: 用户选择启用的协议字母串（如 "bc"）；留空=全部协议（兼容旧 .state / 直接调用）
 config_gen() {
   local domain=$1 port_any=$2 port_hy2=$3 port_tuic=$4 \
         pass_any=$5 pass_hy2=$6 pass_tuic=$7 uuid_tuic=$8 \
         obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}} \
         protos=${11:-} port_socks=${12:-} user_socks=${13:-} pass_socks=${14:-}
 
-  # 探测 sing-box 大版本，决定配置语法（1.14 起支持 handshake_timeout 等新 TLS 字段）。
-  # 1.13 分支保持原有输出不变；1.14 分支按新语法生成，两个版本互不覆盖。
-  local sb_ver sb_ge_114 supported
-  sb_ver=$(core_sb_ver 2>/dev/null) || sb_ver=""
-  if core_ver_ge "$sb_ver" 1.14; then sb_ge_114=1; else sb_ge_114=0; fi
-  [[ -n "$sb_ver" ]] || warn "无法探测 sing-box 版本，按 1.13 语法生成配置（若实际为 1.14+ 请先升级脚本）"
-  # 内核支持的协议集
-  supported=$(core_supported_protos "$sb_ver")
-  # 实际生效集 = 用户选择 ∩ 内核支持。
-  #   用户选择由 protos 字母串给出（安装/变更时自选，见 sb_install / config_change）；
-  #   内核不支持的协议（如切到 1.13 时的 socks5）即使被选中也不生成 inbound，
-  #   其参数仍保留在 .state，切回支持的高版本时自动恢复（DEVELOPMENT.md 约定）。
-  local chosen active="" p
+  # v1.5.0 起只适配基线大版本（SB_VER_BASE=1.14）：所有启用协议恒按最新语法生成，
+  # 不再探测已装内核版本做语法分支/裁剪。安装/升级流程保证内核即为 1.14.x。
+  # 实际生成的协议集 = 用户选择（protos）；未指定时默认全部协议。
+  local active p
   if [[ -n "$protos" ]]; then
-    chosen=$(core_protos_from_letters "$protos")
+    active=$(core_protos_from_letters "$protos")
   else
-    chosen="$supported"   # 未指定（旧 .state / 直接调用）：沿用内核支持的全部
+    active=$(core_all_protos)
   fi
-  for p in $chosen; do
-    if core_proto_supported "$p" "$sb_ver"; then active="$active $p"; fi
-  done
-  active="${active# }"
-  [[ -n "$active" ]] || { error "没有可生成的协议（已选: ${protos:-全部}，内核 v${sb_ver:-?}）"; return 1; }
+  [[ -n "$active" ]] || { error "没有要生成的协议（已选: ${protos:-空}）"; return 1; }
 
   # Hy2 实际监听端口：始终为基础整数端口（sing-box 要求 uint16，核心不支持服务端端口跳跃）。
   # 节点 URI 的 server_port 始终用基础端口 port_hy2（真实监听端口），
@@ -43,7 +30,7 @@ config_gen() {
   # 客户端跳跃需额外在外部防火墙/安全组放行整个范围。
   local hy2_listen="$port_hy2" port_hy2_node="$port_hy2"
 
-  # 端口不可重复：仅校验实际生效协议的非空端口（未启用的协议端口为空，
+  # 端口不可重复：仅校验实际生成协议的非空端口（未启用的协议端口为空，
   # 若参与比较会出现 "" == "" 的误判）。
   local _p _port _seen=" "
   for _p in $active; do
@@ -86,22 +73,21 @@ config_gen() {
     printf '{\n'
     printf '  "log": { "level": "info", "timestamp": true },\n'
     printf '  "inbounds": [\n'
-    # 逐协议输出，仅生成"用户已选 且 内核支持"的 inbound；用 first 标记控制逗号，
-    # 避免被裁剪协议留下的空行残成非法 JSON（如 ",,\n" 或孤立的逗号）。
+    # 逐协议输出用户启用的 inbound；用 first 标记控制逗号。
     local first=1
     if [[ " $active " == *" anytls "* ]]; then
       [[ $first -eq 0 ]] && printf ',\n'
-      proto_anytls_inbound "$port_any" "$pass_any" "$domain" "$sb_ge_114"
+      proto_anytls_inbound "$port_any" "$pass_any" "$domain"
       first=0
     fi
     if [[ " $active " == *" hysteria2 "* ]]; then
       [[ $first -eq 0 ]] && printf ',\n'
-      proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$sb_ge_114"
+      proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2"
       first=0
     fi
     if [[ " $active " == *" tuic "* ]]; then
       [[ $first -eq 0 ]] && printf ',\n'
-      proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain" "$sb_ge_114"
+      proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain"
       first=0
     fi
     if [[ " $active " == *" socks "* ]]; then
@@ -112,7 +98,7 @@ config_gen() {
     fi
     # 兜底：active 已在函数开头校验非空，此处仅防御性判断
     if [[ $first -eq 1 ]]; then
-      error "当前 sing-box 版本 ($sb_ver) 不支持任何已适配协议，请升级内核"
+      error "没有生成任何 inbound（active 为空，逻辑异常）"
       return 1
     fi
     printf '\n  ],\n'
@@ -128,11 +114,10 @@ config_gen() {
   chmod 600 "$SB_CONF"; chown root:root "$SB_CONF" 2>/dev/null || true
 
   # 状态文件（节点 URI 生成依赖，权限 600）
-  # PROTOS 保存"用户选择的字母串"（而非生效集）：内核降/升级后仍保留用户意图，
-  # 未适配协议的参数也一并保留，切回支持的高版本时自动恢复生成。
-  # 未显式指定 protos 时回写为内核支持的全部（兼容旧 .state 与直接调用）。
+  # PROTOS 保存"用户选择的字母串"（而非生成集）：升级内核大版本或重装后仍保留
+  # 用户意图。未显式指定 protos 时回写为全部协议的字母串（兼容旧 .state 与直接调用）。
   local protos_save=$protos
-  [[ -n "$protos_save" ]] || protos_save=$(core_supported_protos "$sb_ver" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' ')
+  [[ -n "$protos_save" ]] || protos_save=$(core_all_protos | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' ')
   cat > "$SB_STATE" <<EOF
 DOMAIN=$domain
 PROTOS=$protos_save
@@ -174,16 +159,7 @@ EOF
       sed -i '/^HOP_HY2=/d' "$SB_STATE" 2>/dev/null || true
     fi
   fi
-  ok "config.json 已生成并通过 sing-box check（已启用: $(core_protos_human "$(echo "$active" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' ')")）"
-  # 提示"已选择但当前内核不支持"的协议（用户主动未选的不提示），避免误以为配置丢失
-  local missing=""
-  for p in $chosen; do
-    [[ " $active " == *" $p "* ]] || missing="$missing $(core_proto_display "$p")"
-  done
-  if [[ -n "$missing" ]]; then
-    warn "以下协议已被选择但当前内核 v${sb_ver} 未适配，未生成 inbound 与节点：${missing}"
-    warn "其配置仍保留在 .state，切换回支持这些协议的高版本内核（选项 7）时自动恢复"
-  fi
+  ok "config.json 已生成并通过 sing-box check（已启用: $(core_protos_human "$protos_save")）"
 }
 
 # 内部：凭证类输入（密码 / obfs）合法性校验。
@@ -308,14 +284,14 @@ config_change() {
   node_gen
 }
 
-# 从 .state 恢复既有参数并重新生成 config.json（供内核大版本切换后自动调用）。
-# 大版本切换（如 1.13 -> 1.14）后新内核的语法要求可能变化，旧 config.json
-# 可能不被新内核接受（1.13 会严格拒绝 1.14 新增字段）；此函数在不改动任何
-# 代理参数的前提下，按新内核语法重建配置。
+# 从 .state 恢复既有参数并按基线语法重新生成 config.json。
+# 供内核升级（选项 7）后调用：把旧脚本版本（v1.3.x 及更早的 1.13 语法/无 socks 字段）
+# 生成的存量 config.json 平滑重建为本脚本基线大版本的最新语法，代理参数保持不变。
+# 重建失败会回滚旧配置；新装/基线内补丁升级时配置文件本就正确，重建是幂等安全操作。
 # 返回 0=已重建 / 1=重建失败（已回滚原配置）/ 2=无 state 或未安装，跳过。
 config_rebuild_from_state() {
-  [[ -f "$SB_STATE" ]] || { warn "未找到状态文件 $SB_STATE，跳过配置自动重建"; return 2; }
-  [[ -x "$SB_BIN" ]]  || { warn "未安装 sing-box，跳过配置自动重建"; return 2; }
+  [[ -f "$SB_STATE" ]] || { warn "未找到状态文件 $SB_STATE，跳过配置重建"; return 2; }
+  [[ -x "$SB_BIN" ]]  || { warn "未安装 sing-box，跳过配置重建"; return 2; }
   set -a; . "$SB_STATE"; set +a
   local bak="${SB_CONF}.pre-ver.$$"
   [[ -f "$SB_CONF" ]] && cp -f "$SB_CONF" "$bak" 2>/dev/null || true

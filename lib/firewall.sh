@@ -140,12 +140,8 @@ fw_disable() {
 fw_apply_choice() {
   local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4 p_socks=${5:-}
   fw_detect
-  # 仅放行实际会生成的端口：用户未选的协议端口为空，内核未适配的协议不会生成 inbound。
-  local supported; supported=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
-  [[ " $supported " == *" anytls "* ]] || p_any=""
-  [[ " $supported " == *" hysteria2 "* ]] || p_hy2=""
-  [[ " $supported " == *" tuic "* ]] || p_tuic=""
-  [[ " $supported " == *" socks "* ]] || p_socks=""
+  # 仅放行实际生成的端口：调用方仅传入启用协议的端口，未启用端口为空自动跳过
+  # （v1.5.0 起无内核版本裁剪，内核恒为基线大版本 1.14.x）。
   case "$choice" in
     1)
       # 先确保 SSH 端口放行，绝对避免远程锁死（尤其是 ufw 后端）

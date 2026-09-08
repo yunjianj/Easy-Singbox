@@ -105,16 +105,15 @@ diag_collect() {
       set +u
       . "$SB_STATE" 2>/dev/null || true
       echo "--- 按协议逐个核对 ---"
-      # 生效集 = 用户选择(PROTOS) ∩ 内核支持，与 config_gen 一致。
-      # 未启用/未适配的协议不会生成 inbound（端口本就不该监听），
+      # 只核对用户启用(PROTOS)的协议；未启用的协议不会生成 inbound（端口本就不该监听），
       # 若按"未监听"标注会误导排查方向——此处显式区分"未启用"与"未监听"。
-      local _sup _chosen _act="" _p
-      _sup=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
-      if [[ -n "${PROTOS:-}" ]]; then _chosen=$(core_protos_from_letters "$PROTOS"); else _chosen="$_sup"; fi
-      for _p in $_chosen; do
-        if core_proto_supported "$_p" "$(core_sb_ver 2>/dev/null || echo 1.13)"; then _act="$_act $_p"; fi
-      done
-      _sup="${_act# }"
+      local _sup
+      if [[ -n "${PROTOS:-}" ]]; then
+        _sup=$(core_protos_from_letters "$PROTOS")
+      else
+        _sup=$(core_all_protos)   # 旧 .state 无 PROTOS：默认全部协议
+      fi
+      _sup=" $_sup "
       # ss 缺失时不再直接放弃核对：core_listening_ports 已内置 /proc/net 回退，
       # 仅在回退也拿不到任何端口时才提示安装（避免把"无法探测"误报为"未监听"）
       if ! command -v ss >/dev/null 2>&1 && [[ -z "$(core_listening_ports)" ]]; then
@@ -125,7 +124,7 @@ diag_collect() {
         fi
         exit 0
       fi
-      if [[ " $_sup " == *" anytls "* ]]; then
+      if [[ "$_sup" == *" anytls "* ]]; then
         if diag_port_listening tcp "${PORT_ANYTLS:-0}"; then
           echo "AnyTLS    tcp/${PORT_ANYTLS:-?} : 监听中"
         else
@@ -134,7 +133,7 @@ diag_collect() {
       else
         echo "AnyTLS    tcp/${PORT_ANYTLS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
-      if [[ " $_sup " == *" hysteria2 "* ]]; then
+      if [[ "$_sup" == *" hysteria2 "* ]]; then
         if diag_port_listening udp "${PORT_HY2_LISTEN:-${PORT_HY2:-0}}"; then
           echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : 监听中"
         else
@@ -143,7 +142,7 @@ diag_collect() {
       else
         echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
-      if [[ " $_sup " == *" tuic "* ]]; then
+      if [[ "$_sup" == *" tuic "* ]]; then
         if diag_port_listening udp "${PORT_TUIC:-0}"; then
           echo "TUIC      udp/${PORT_TUIC:-?} : 监听中"
         else
@@ -152,7 +151,7 @@ diag_collect() {
       else
         echo "TUIC      udp/${PORT_TUIC:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
-      if [[ " $_sup " == *" socks "* ]]; then
+      if [[ "$_sup" == *" socks "* ]]; then
         if diag_port_listening tcp "${PORT_SOCKS:-0}"; then
           echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
           if [[ -z "${USER_SOCKS:-}" || -z "${PASS_SOCKS:-}" ]]; then
