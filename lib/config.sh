@@ -175,29 +175,32 @@ _config_credential_ok() {
 # 交互选择要启用的协议（字母编号，可组合），输出字母串（如 "bc"）。
 # 参数：默认已选的字母串（可为空）。至少选择一个，空输入会要求重输。
 # 供 sb_install 与 config_change 共用，保证两处交互一致。
+# 注意：本函数常被命令替换调用（protos=$(config_pick_protos ...)），stdout 会被捕获，
+# 因此所有面向用户的菜单/提示/告警一律输出到 stderr（同 core_prompt 约定），
+# stdout 仅用于回显最终选择的字母串——否则菜单会被 $( ) 吞掉、用户看不到。
 config_pick_protos() {
   local def=${1:-} in picked=""
-  echo "选择要启用的协议（输入字母组合，如 bc = Hysteria2 + TUIC）："
+  echo "选择要启用的协议（输入字母组合，如 bc = Hysteria2 + TUIC）：" >&2
   local l p name
   for p in anytls hysteria2 tuic socks; do
     l=$(core_proto_letter "$p"); name=$(core_proto_display "$p")
     case "$p" in
-      anytls)    printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "加密(强制 TLS)" ;;
-      hysteria2) printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" ;;
-      tuic)      printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" ;;
-      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "明文(sing-box socks 无 tls 字段)" ;;
+      anytls)    printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "加密(强制 TLS)" >&2 ;;
+      hysteria2) printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" >&2 ;;
+      tuic)      printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" >&2 ;;
+      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "明文(sing-box socks 无 tls 字段)" >&2 ;;
     esac
   done
   while [[ -z "$picked" ]]; do
     in=$(core_prompt "启用哪些协议(abcd 可组合)" "$def")
     picked=$(core_protos_from_letters "$in")
-    [[ -n "$picked" ]] || warn "请至少输入一个有效字母（a/b/c/d），例如 bc"
+    [[ -n "$picked" ]] || warn "请至少输入一个有效字母（a/b/c/d），例如 bc" >&2
   done
-  info "已选择: $(core_protos_human "$in")"
+  info "已选择: $(core_protos_human "$in")" >&2
   # 选择 SOCKS5 时明确告警（唯一非 TLS 协议）
   if [[ " $picked " == *" socks "* ]]; then
-    warn "SOCKS5 为明文协议（sing-box socks inbound 不支持 TLS），握手与目标地址可被链路识别。"
-    warn "已默认生成随机用户名与密码；若留空将关闭认证，等同开放代理，极易被扫描滥用。"
+    warn "SOCKS5 为明文协议（sing-box socks inbound 不支持 TLS），握手与目标地址可被链路识别。" >&2
+    warn "已默认生成随机用户名与密码；若留空将关闭认证，等同开放代理，极易被扫描滥用。" >&2
   fi
   # 回显字母串（规范化：仅保留有效字母并按 abcd 排序）
   core_protos_from_letters "$in" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' '
