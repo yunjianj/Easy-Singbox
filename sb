@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.3.2"
+SB_SCRIPT_VERSION="1.3.3"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -397,6 +397,9 @@ sb_version_menu() {
       info "检测到大版本切换 v$old_ver -> v$ver（$old_fam -> $new_fam），自动按新内核语法重建配置..."
       if config_rebuild_from_state; then
         ok "配置已按 v$ver 语法自动重建（代理参数保持不变）"
+        # 重建后按新内核裁剪协议重新生成节点：切到旧内核时未适配协议不输出节点，
+        # 切回适配的高版本内核时恢复输出（nodes.txt 同步刷新，避免残留旧 URI）。
+        node_gen || true
       else
         warn "配置自动重建失败，已回滚原配置；可执行选项 2 手动变更代理配置"
       fi

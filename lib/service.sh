@@ -207,6 +207,13 @@ service_start_openrc() {
 # 客户端报 "connection refused" 的直接原因就是此处无监听，故安装/变更后必须显式校验。
 service_verify_ports() {
   local pa=$1 ph=$2 pt=$3 bad=0 tcp udp
+  # 裁剪协议后，可能只有部分协议被生成（如切到旧内核时新协议不入 config.json）。
+  # 通过 core_supported_protos 判断当前内核支持哪些协议，只校验实际生成的端口，
+  # 避免把"未适配协议"误报为"未监听"（其端口本就不该监听）。
+  local supported; supported=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
+  [[ " $supported " == *" anytls "* ]] || pa=""   # 未适配则跳过该校验
+  [[ " $supported " == *" hysteria2 "* ]] || ph=""
+  [[ " $supported " == *" tuic "* ]] || pt=""
   if ! command -v ss >/dev/null 2>&1; then
     info "未安装 ss(iproute2)，尝试自动安装..."
     core_ensure_deps >/dev/null 2>&1 || true
@@ -227,13 +234,24 @@ service_verify_ports() {
   for i in $(seq 1 20); do   # 20 × 0.5s = 最多等 10s
     tcp=$(core_listening_ports tcp)
     udp=$(core_listening_ports udp)
-    [[ "$tcp" == *" $pa "* && "$udp" == *" $ph "* && "$udp" == *" $pt "* ]] && break
+    # 仅校验当前内核适配的（非空）端口；若全为空（极端：无协议适配），直接视为 OK。
+    local okall=1
+    if [[ -n "$pa" ]] && [[ "$tcp" != *" $pa "* ]]; then okall=0; fi
+    if [[ -n "$ph" ]] && [[ "$udp" != *" $ph "* ]]; then okall=0; fi
+    if [[ -n "$pt" ]] && [[ "$udp" != *" $pt "* ]]; then okall=0; fi
+    [[ "$okall" -eq 1 ]] && break
     sleep 0.5
   done
-  # 各协议只列一次，纯 bash 精确匹配（不依赖 ss 过滤器语法）
-  if [[ "$tcp" == *" $pa "* ]]; then ok "AnyTLS 监听正常 tcp/$pa"; else error "AnyTLS 未监听 tcp/$pa"; bad=1; fi
-  if [[ "$udp" == *" $ph "* ]]; then ok "Hysteria2 监听正常 udp/$ph"; else error "Hysteria2 未监听 udp/$ph"; bad=1; fi
-  if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
+  # 各协议只列一次，纯 bash 精确匹配（不依赖 ss 过滤器语法）；空端口（未适配）跳过
+  if [[ -n "$pa" ]]; then
+    if [[ "$tcp" == *" $pa "* ]]; then ok "AnyTLS 监听正常 tcp/$pa"; else error "AnyTLS 未监听 tcp/$pa"; bad=1; fi
+  fi
+  if [[ -n "$ph" ]]; then
+    if [[ "$udp" == *" $ph "* ]]; then ok "Hysteria2 监听正常 udp/$ph"; else error "Hysteria2 未监听 udp/$ph"; bad=1; fi
+  fi
+  if [[ -n "$pt" ]]; then
+    if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
+  fi
   if (( bad )); then
     error "存在未监听的端口，客户端会报 connection refused。当前监听情况："
     if command -v ss >/dev/null 2>&1; then

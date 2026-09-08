@@ -138,24 +138,34 @@ fw_disable() {
 # choice: 1=全部 2=关闭防火墙 3=不开放
 # 注：Hysteria2 跳跃段经 REDIRECT 重定向到基础端口 p_hy2，INPUT 只需放行 p_hy2。
 fw_apply_choice() {
-  local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4
+  local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4 hint=""
   fw_detect
+  # 裁剪协议后，仅放行当前内核适配的协议端口（未适配协议不会生成 inbound，放行其端口无意义）。
+  local supported; supported=$(core_supported_protos "$(core_sb_ver 2>/dev/null || echo 1.13)")
+  [[ " $supported " == *" anytls "* ]] || p_any=""
+  [[ " $supported " == *" hysteria2 "* ]] || p_hy2=""
+  [[ " $supported " == *" tuic "* ]] || p_tuic=""
   case "$choice" in
     1)
       # 先确保 SSH 端口放行，绝对避免远程锁死（尤其是 ufw 后端）
       fw_ensure_ssh
       fw_open_port tcp 80 permanent
-      fw_open_port tcp "$p_any" permanent
-      fw_open_port udp "$p_hy2" permanent
-      fw_open_port udp "$p_tuic" permanent
-      ok "已通过 $FW_BACKEND 开放 22(SSH) + 80 + 三协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
+      [[ -n "$p_any" ]] && fw_open_port tcp "$p_any" permanent
+      [[ -n "$p_hy2" ]] && fw_open_port udp "$p_hy2" permanent
+      [[ -n "$p_tuic" ]] && fw_open_port udp "$p_tuic" permanent
+      ok "已通过 $FW_BACKEND 开放 22(SSH) + 80 + 已适配协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
       ;;
     2)
       fw_disable
       warn "已关闭防火墙，开放所有端口（存在安全风险，请确认网络环境可信）"
       ;;
     3)
-      warn "未开放任何端口，请自行在防火墙/安全组中放行 22(SSH,避免锁死) + 80（仅 HTTP-01 需要）+ 三协议端口及 Hy2 基础端口 $p_hy2"
+      # 拼接实际需要手动放行的协议端口（已适配的才列出）
+      local portlist=""
+      [[ -n "$p_any" ]] && portlist="$portlist TCP $p_any(AnyTLS)"
+      [[ -n "$p_hy2" ]] && portlist="$portlist UDP $p_hy2(Hy2)"
+      [[ -n "$p_tuic" ]] && portlist="$portlist UDP $p_tuic(TUIC)"
+      warn "未开放任何端口，请自行在防火墙/安全组中放行 22(SSH,避免锁死) + 80（仅 HTTP-01 需要）${portlist:+，以及 }${portlist}。若端口跳跃已启用，还需放行整个 UDP 跳跃段"
       ;;
   esac
 }

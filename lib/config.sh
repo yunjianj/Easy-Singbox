@@ -11,10 +11,14 @@ config_gen() {
 
   # 探测 sing-box 大版本，决定配置语法（1.14 起支持 handshake_timeout 等新 TLS 字段）。
   # 1.13 分支保持原有输出不变；1.14 分支按新语法生成，两个版本互不覆盖。
-  local sb_ver sb_ge_114
+  local sb_ver sb_ge_114 supported
   sb_ver=$(core_sb_ver 2>/dev/null) || sb_ver=""
   if core_ver_ge "$sb_ver" 1.14; then sb_ge_114=1; else sb_ge_114=0; fi
   [[ -n "$sb_ver" ]] || warn "无法探测 sing-box 版本，按 1.13 语法生成配置（若实际为 1.14+ 请先升级脚本）"
+  # 按内核版本裁剪协议：仅生成当前内核支持的 inbound。不支持的协议（如切到旧内核时
+  # 尚未适配的新协议）不写入 config.json，但 .state 仍保留其参数——切回支持该协议的
+  # 高版本内核时由 config_rebuild_from_state 自动恢复（见 DEVELOPMENT.md 约定）。
+  supported=$(core_supported_protos "$sb_ver")
 
   # Hy2 实际监听端口：始终为基础整数端口（sing-box 要求 uint16，核心不支持服务端端口跳跃）。
   # 节点 URI 的 server_port 始终用基础端口 port_hy2（真实监听端口），
@@ -45,11 +49,29 @@ config_gen() {
     printf '{\n'
     printf '  "log": { "level": "info", "timestamp": true },\n'
     printf '  "inbounds": [\n'
-    proto_anytls_inbound "$port_any" "$pass_any" "$domain" "$sb_ge_114"
-    printf ',\n'
-    proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$sb_ge_114"
-    printf ',\n'
-    proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain" "$sb_ge_114"
+    # 逐协议输出，仅保留当前内核支持的 inbound；用 first 标记控制逗号，
+    # 避免被裁剪协议留下的空行残成非法 JSON（如 ",,\n" 或孤立的逗号）。
+    local first=1
+    if [[ " $supported " == *" anytls "* ]]; then
+      [[ $first -eq 0 ]] && printf ',\n'
+      proto_anytls_inbound "$port_any" "$pass_any" "$domain" "$sb_ge_114"
+      first=0
+    fi
+    if [[ " $supported " == *" hysteria2 "* ]]; then
+      [[ $first -eq 0 ]] && printf ',\n'
+      proto_hysteria2_inbound "$hy2_listen" "$pass_hy2" "$domain" "$obfs_hy2" "$sb_ge_114"
+      first=0
+    fi
+    if [[ " $supported " == *" tuic "* ]]; then
+      [[ $first -eq 0 ]] && printf ',\n'
+      proto_tuic_inbound "$port_tuic" "$uuid_tuic" "$pass_tuic" "$domain" "$sb_ge_114"
+      first=0
+    fi
+    # 极端情况：当前内核一个协议都不支持（理论上最低版本均 <= 1.13，不会发生）——兜底报错。
+    if [[ $first -eq 1 ]]; then
+      error "当前 sing-box 版本 ($sb_ver) 不支持任何已适配协议，请升级内核"
+      return 1
+    fi
     printf '\n  ],\n'
     # 注意：DoH(https) DNS 服务器不能带 "detour": "direct" —— sing-box 运行期会报
     # FATAL "detour to an empty direct outbound makes no sense" 直接崩溃（check 却能通过）。
@@ -101,6 +123,11 @@ EOF
     fi
   fi
   ok "config.json 已生成并通过 sing-box check"
+  # 提示被裁剪的协议（仅当前内核不支持的），避免用户误以为配置丢失
+  if [[ " $supported " != *" anytls "* || " $supported " != *" hysteria2 "* || " $supported " != *" tuic "* ]]; then
+    warn "当前内核 v${sb_ver} 未适配以下协议（config.json 未生成，.state 已保留其配置）：$(for p in anytls hysteria2 tuic; do [[ " $supported " == *" $p "* ]] || echo -n " $p"; done)"
+    warn "切换回支持这些协议的高版本内核（选项 7）时，会自动按 .state 恢复并生成节点"
+  fi
 }
 
 # 内部：凭证类输入（密码 / obfs）合法性校验。
