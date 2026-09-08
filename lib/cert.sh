@@ -190,7 +190,9 @@ cert_has_valid() {
   [[ -f "$ACME_HOME/${d}_ecc/${d}.key" ]] || return 1
   conf="$ACME_HOME/${d}_ecc/${d}.conf"
   [[ -f "$conf" ]] || return 1
-  renew_ts=$(grep -oE '^Le_NextRenewTimeStr=[0-9]+' "$conf" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+  # acme.sh 的 _save_conf 写配置为 key='value' 带单引号（如 Le_NextRenewTimeStr='1700...'），
+  # 正则需容忍可选引号；值本身是秒级时间戳（_time2str 生成），提取数字后比较。
+  renew_ts=$(sed -n "s/^Le_NextRenewTimeStr=['\"]\?\([0-9][0-9]*\)['\"]\?.*/\1/p" "$conf" 2>/dev/null | head -1)
   if [[ -z "$renew_ts" || ! "$renew_ts" =~ ^[0-9]+$ ]]; then
     return 1   # 无法确认续期时间，保守需重签
   fi
