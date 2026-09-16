@@ -152,16 +152,16 @@ diag_collect() {
         echo "TUIC      udp/${PORT_TUIC:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
       if [[ "$_sup" == *" socks "* ]]; then
-        if diag_port_listening tcp "${PORT_SOCKS:-0}"; then
-          echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
+        if diag_port_listening tcp "${PORT_SOCKS:-0}" && diag_port_listening udp "${PORT_SOCKS:-0}"; then
+          echo "SOCKS5    tcp+udp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
           if [[ -z "${USER_SOCKS:-}" || -z "${PASS_SOCKS:-}" ]]; then
             echo "           └ [风险] 未设置用户名/密码 = 开放代理，任何人可直接使用，请尽快启用认证"
           fi
         else
-          echo "SOCKS5    tcp/${PORT_SOCKS:-?} : [异常] 未监听"
+          echo "SOCKS5    tcp+udp/${PORT_SOCKS:-?} : [异常] 未监听"
         fi
       else
-        echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
+        echo "SOCKS5    tcp+udp/${PORT_SOCKS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
     ) || true
   fi

@@ -150,10 +150,12 @@ fw_apply_choice() {
       [[ -n "$p_any" ]] && fw_open_port tcp "$p_any" permanent
       [[ -n "$p_hy2" ]] && fw_open_port udp "$p_hy2" permanent
       [[ -n "$p_tuic" ]] && fw_open_port udp "$p_tuic" permanent
+      # SOCKS5 同时监听 TCP(握手) 与 UDP(UDP ASSOCIATE 转发)，两个协议都要放行。
       [[ -n "$p_socks" ]] && fw_open_port tcp "$p_socks" permanent
+      [[ -n "$p_socks" ]] && fw_open_port udp "$p_socks" permanent
       ok "已通过 $FW_BACKEND 开放 22(SSH) + 80 + 已启用协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
       if [[ -n "$p_socks" ]]; then
-        warn "SOCKS5 端口 $p_socks 已放行：该协议为明文，任何人均可探测到，请确保已设置用户名密码"
+        warn "SOCKS5 端口 $p_socks 已放行 tcp+udp：该协议为明文，任何人均可探测到，请确保已设置用户名密码"
       fi
       ;;
     2)
@@ -166,7 +168,7 @@ fw_apply_choice() {
       [[ -n "$p_any" ]] && portlist="$portlist TCP $p_any(AnyTLS)"
       [[ -n "$p_hy2" ]] && portlist="$portlist UDP $p_hy2(Hy2)"
       [[ -n "$p_tuic" ]] && portlist="$portlist UDP $p_tuic(TUIC)"
-      [[ -n "$p_socks" ]] && portlist="$portlist TCP $p_socks(SOCKS5/明文)"
+      [[ -n "$p_socks" ]] && portlist="$portlist TCP/UDP $p_socks(SOCKS5/明文)"
       warn "未开放任何端口，请自行在防火墙/安全组中放行 22(SSH,避免锁死) + 80（仅 HTTP-01 需要）${portlist:+，以及 }${portlist}。若端口跳跃已启用，还需放行整个 UDP 跳跃段"
       ;;
   esac

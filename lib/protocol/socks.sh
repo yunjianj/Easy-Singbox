@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# lib/protocol/socks.sh — SOCKS5 inbound 片段生成（TCP，明文）
+# lib/protocol/socks.sh — SOCKS5 inbound 片段生成（TCP + UDP，明文）
 #
 # 重要：sing-box 的 socks inbound 官方**不支持 tls 字段**（文档 Structure 仅有
 # Listen Fields + users）。因此这是本项目**唯一不受「强制 TLS」约束**的协议：
 # 握手与目标地址均为明文，可被链路识别，且无认证时等同开放代理（极易被扫描滥用）。
 # 故默认生成随机用户名与密码，并在安装/节点输出处显著告警。
+#
+# 该 inbound 在同一 listen_port 上同时监听 TCP（握手/CONNECT）与 UDP（UDP ASSOCIATE
+# 转发），sing-box 无需额外字段即自动处理 UDP，故防火墙需同时放行 tcp 与 udp。
 #
 # users 为空数组或不给 users 字段 = 不认证（不推荐）。
 # 参数：port [user] [pass]；user/pass 任一为空即不启用认证。

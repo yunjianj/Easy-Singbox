@@ -234,7 +234,7 @@ service_verify_ports() {
     if [[ -n "$pa" ]] && [[ "$tcp" != *" $pa "* ]]; then okall=0; fi
     if [[ -n "$ph" ]] && [[ "$udp" != *" $ph "* ]]; then okall=0; fi
     if [[ -n "$pt" ]] && [[ "$udp" != *" $pt "* ]]; then okall=0; fi
-    if [[ -n "$ps" ]] && [[ "$tcp" != *" $ps "* ]]; then okall=0; fi
+    if [[ -n "$ps" ]] && { [[ "$tcp" != *" $ps "* ]] || [[ "$udp" != *" $ps "* ]]; }; then okall=0; fi
     [[ "$okall" -eq 1 ]] && break
     sleep 0.5
   done
@@ -249,7 +249,7 @@ service_verify_ports() {
     if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
   fi
   if [[ -n "$ps" ]]; then
-    if [[ "$tcp" == *" $ps "* ]]; then ok "SOCKS5 监听正常 tcp/$ps（明文，无 TLS）"; else error "SOCKS5 未监听 tcp/$ps"; bad=1; fi
+    if [[ "$tcp" == *" $ps "* && "$udp" == *" $ps "* ]]; then ok "SOCKS5 监听正常 tcp+udp/$ps（明文，无 TLS）"; else error "SOCKS5 未监听 tcp+udp/$ps"; bad=1; fi
   fi
   if (( bad )); then
     error "存在未监听的端口，客户端会报 connection refused。当前监听情况："

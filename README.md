@@ -58,7 +58,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 | a | AnyTLS (TCP) | TCP | password | 抗探测，需服务端默认 padding，强制 TLS |
 | b | Hysteria2 (QUIC) | UDP | password | 可选 salamander obfs，强制 TLS |
 | c | TUIC v5 (QUIC) | UDP | uuid + password | 双字段，强制 TLS |
-| d | SOCKS5 | TCP | user + password | **明文（官方无 TLS 字段）**，默认随机认证 |
+| d | SOCKS5 | TCP/UDP | user + password | **明文（官方无 TLS 字段）**，默认随机认证；同端口支持 UDP ASSOCIATE |
 
 - AnyTLS / Hysteria2 / TUIC 共用同一份 TLS 证书，由证书模块统一签发到 `/etc/sing-box/ssl/`。
 - 输入编号组合即可启用部分协议（如 `bc` 仅启用 Hysteria2 + TUIC）；SOCKS5 是唯一不受强制 TLS 约束的协议，启用前会显著告警，默认生成随机用户名/密码，留空即关闭认证（**等同开放代理，不推荐**）。
@@ -98,7 +98,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.5.3
+      easy-singbox  管理面板  v1.5.4
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -109,7 +109,7 @@ sb
              IPv6 2001:db8::1  |  日本/东京 / 某ISP
  Sing-Box  : 已运行  v1.14.0  (2 协议在线)
              [内核 1.14.x 已达标]
- 脚本版本  : v1.5.3  [已是最新]
+ 脚本版本  : v1.5.4  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -118,7 +118,7 @@ sb
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
  [7] 升级内核版本        (适配 sing-box 1.14.x，升到最新补丁)
- [8] 更新脚本            (当前 v1.5.3)
+ [8] 更新脚本            (当前 v1.5.4)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
  [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)
  [0] 退出
@@ -199,7 +199,7 @@ BBR 对 Hysteria2 / TUIC (QUIC) 和 AnyTLS (TCP) 流量均有显著加速效果�
 ## 已知限制
 
 - **AnyTLS 客户端兼容性**：部分客户端不识别 `anytls://` URI，需使用 outbound JSON 兜底导入（见上）。
-- **SOCKS5 明文（v1.4.0 起）**：sing-box 官方 socks inbound **不支持 TLS**，为唯一不受强制 TLS 约束的协议。握手与目标地址明文可见，可能被链路识别/封锁；必须设置用户名密码，严禁无认证对外开放（等同开放代理）。仅按需启用。
+- **SOCKS5 明文（v1.4.0 起）**：sing-box 官方 socks inbound **不支持 TLS**，为唯一不受强制 TLS 约束的协议。握手与目标地址明文可见，可能被链路识别/封锁；必须设置用户名密码，严禁无认证对外开放（等同开放代理）。同一 `listen_port` 上同时监听 TCP（握手/CONNECT）与 UDP（UDP ASSOCIATE 转发），故防火墙会同时放行该端口的 tcp 与 udp。仅按需启用。
 
 - 降权运行以 `singbox` 系统用户执行；端口均为高位随机，无需 `CAP_NET_BIND_SERVICE`（systemd 单元已移除该 capability）。
 - DNS-01 仅支持 Cloudflare，其他 DNS 服务商本期未实现。

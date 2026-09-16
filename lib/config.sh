@@ -185,10 +185,10 @@ config_pick_protos() {
   for p in anytls hysteria2 tuic socks; do
     l=$(core_proto_letter "$p"); name=$(core_proto_display "$p")
     case "$p" in
-      anytls)    printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "加密(强制 TLS)" >&2 ;;
-      hysteria2) printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" >&2 ;;
-      tuic)      printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "加密(强制 TLS)" >&2 ;;
-      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "明文(sing-box socks 无 tls 字段)" >&2 ;;
+      anytls)    printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "TLS加密" >&2 ;;
+      hysteria2) printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "TLS加密" >&2 ;;
+      tuic)      printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "TLS加密" >&2 ;;
+      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP/UDP" "明文" >&2 ;;
     esac
   done
   while [[ -z "$picked" ]]; do

@@ -223,10 +223,12 @@ core_proto_display() {
 }
 
 # 协议名 -> 传输层（防火墙放行与端口校验用）
+# SOCKS5 同时使用 TCP（握手）与 UDP（UDP ASSOCIATE 转发），故为 tcp/udp。
 core_proto_transport() {
   case "$1" in
     hysteria2|tuic) echo udp ;;
-    anytls|socks) echo tcp ;;
+    socks) echo "tcp/udp" ;;
+    anytls) echo tcp ;;
     *) echo tcp ;;
   esac
 }

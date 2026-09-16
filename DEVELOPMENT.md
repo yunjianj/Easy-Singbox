@@ -36,7 +36,7 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 | a | anytls | tcp | password | 强制 TLS |
 | b | hysteria2 | udp | password | 强制 TLS |
 | c | tuic | udp | uuid+password | 强制 TLS |
-| d | socks | tcp | user+password | 明文（sing-box socks 无 tls 字段） |
+| d | socks | tcp+udp | user+password | 明文（sing-box socks 无 tls 字段） |
 
 **生成集 = 用户选择(PROTOS)**。`.state` 的 `PROTOS` 保存用户原始字母选择；
 `config_gen` / `node_gen` / `diag` 全部只依据 `PROTOS` 生成对应 inbound 与 URI
