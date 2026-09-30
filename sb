@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.5.4"
+SB_SCRIPT_VERSION="1.5.5"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -565,6 +565,13 @@ sb_self_update() {
 sb_show_menu() {
   local vstat
   vstat=$(sb_script_version_status "$SB_SCRIPT_VERSION") || true
+  # 清屏时机（v1.5.5 修复安卓端「节点看不到」）：
+  # 原来在函数开头无条件 clear。选项 6 打印完节点后 main_menu 立刻回到这里，
+  # clear 会把刚打印的节点整个刷掉——屏幕上什么都看不到，用户误以为「节点没打印」。
+  # 参考项目（yonggekkk/sing-box-yg）同样用 clear 刷新菜单，但它把「查看节点」放在
+  # 二级菜单、看完节点先回二级菜单（不清屏），节点因此能留在屏幕上被长按复制。
+  # 照此思路：本函数开头仍清屏（菜单本身需要干净的屏），
+  # 但「打印完节点后的那一轮」由 main_menu 跳过清屏并等用户确认，见 main_menu。
   clear 2>/dev/null || true
   local os arch virt bbr ipregion status inst running ver proto
   os=$(core_detect_os)
@@ -578,45 +585,67 @@ sb_show_menu() {
   local arch_disp="$arch (AES-NI: $aes)"
   IFS='|' read -r inst running ver proto <<< "$(core_sb_status)"
 
-  echo "=============================================================="
-  echo -e "      ${C_BOLD}easy-singbox  管理面板${C_RST}  ${C_BOLD}v${SB_SCRIPT_VERSION}${C_RST}"
-  echo "--------------------------------------------------------------"
-  echo " 系统      : $os"
-  echo " 指令集    : $arch_disp"
-  echo " 虚拟化    : $virt"
-  echo " BBR / FQ  : $bbr"
-  echo " IP / 地区 : "
+  # 自适应面板：横线跟随终端宽度，字段/菜单项按可用宽度截断或缩排，
+  # 保证「一行就是一行」，终端不会替我们软换行（详见 core.sh ui_* 注释）。
+  ui_banner "easy-singbox  管理面板" "v${SB_SCRIPT_VERSION}"
+  ui_field "系统"     "$os"
+  ui_field "指令集"   "$arch_disp"
+  ui_field "虚拟化"   "$virt"
+  ui_field "BBR / FQ" "$bbr"
+  # IP / 地区：core_detect_ip_region 每行一条。
+  # 缩排默认 13 列与值区对齐；但该串本身可达 56 列（IPv4 + 地区/城市 + ISP），
+  # 13+56=69 已超 62，固定缩排必然截掉 ISP 名。此时按行自动收窄缩排以保住完整内容——
+  # 宁可对齐差一点，也不要截掉用户判断线路用的地区/ISP 信息。
+  # 两级策略：缩排后仍放不下才用 core_dcut 截断，保证任何宽度下都不超宽。
+  ui_field "IP / 地区" ""
+  local uw ind lw; uw=$(core_term_width); (( uw > 62 )) && uw=62
   while IFS= read -r line; do
-    [[ -n "$line" ]] && echo "             $line"
+    [[ -z "$line" ]] && continue
+    lw=$(core_dwidth "$line")
+    ind=13
+    (( ind + lw > uw - 1 )) && ind=$(( uw - 1 - lw ))
+    (( ind < 1 )) && ind=1
+    printf '%*s%s\n' "$ind" "" "$(core_dcut "$line" $(( uw - ind )))"
   done <<< "$ipregion"
-  echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
+  ui_field "Sing-Box" "$inst / $running  v$ver  ($proto 协议在线)"
   # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
   if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
-    echo -e "             ${C_RED}[内核版本过低：本脚本需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级]${C_RST}"
+    # 告警可能超宽：窄屏拆两行并各自截断，避免红色长行折行把面板顶掉
+    local wmsg="[内核版本过低：本脚本需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级]"
+    if (( $(core_dwidth "$wmsg") <= $(core_term_width) - 11 )); then
+      ui_note "$C_RED" "$wmsg" 11
+    else
+      ui_note "$C_RED" "[内核版本过低]" 11
+      ui_note "" "需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级" 11
+    fi
   fi
   case "$vstat" in
-    latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
-    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_RED}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
-    *)        echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_YEL}[远程版本未知，请检查网络]${C_RST}" ;;
+    latest)   ui_field "脚本版本" "v${SB_SCRIPT_VERSION}"
+              ui_note "$C_GRN" "[已是最新]" 15 ;;
+    update:*) local nv="${vstat#update:}"
+              ui_field "脚本版本" "v${SB_SCRIPT_VERSION}"
+              ui_note "$C_RED" "[发现新版本 v${nv}，可执行选项 8 更新]" 15 ;;
+    *)        ui_field "脚本版本" "v${SB_SCRIPT_VERSION}"
+              ui_note "$C_YEL" "[远程版本未知，请检查网络]" 15 ;;
   esac
-  echo "--------------------------------------------------------------"
+  ui_rule "-" 62
   if [[ -x "$SB_BIN" ]]; then
-    echo " [1] 卸载 Sing-Box"
+    ui_item 1 "卸载 Sing-Box" ""
   else
-    echo " [1] 一键安装 Sing-Box"
+    ui_item 1 "一键安装 Sing-Box" ""
   fi
-  echo " [2] 变更代理配置      (协议 / 端口 / 凭证)"
-  echo " [3] 变更证书配置      (HTTP-01 / DNS-01 / 重签)"
-  echo " [4] 启动 Sing-Box"
-  echo " [5] 停止 Sing-Box"
-  echo " [6] 重启 / 查看节点   (reload + 打印节点)"
-  echo " [7] 升级内核版本        (适配 sing-box ${SB_VER_BASE}.x，升到最新补丁)"
-  echo " [8] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
-  echo " [9] 诊断与日志        (排查节点不通，生成可发送的报告)"
-  echo " [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)"
-  echo " [0] 退出"
-  echo "=============================================================="
+  ui_item 2  "变更代理配置"      "协议 / 端口 / 凭证"
+  ui_item 3  "变更证书配置"      "HTTP-01 / DNS-01 / 重签"
+  ui_item 4  "启动 Sing-Box"      ""
+  ui_item 5  "停止 Sing-Box"      ""
+  ui_item 6  "重启 / 查看节点"    "reload + 打印节点"
+  ui_item 7  "升级内核版本"       "适配 sing-box ${SB_VER_BASE}.x，升到最新补丁"
+  ui_item 8  "更新脚本"           "当前 v$SB_SCRIPT_VERSION"
+  ui_item 9  "诊断与日志"         "排查节点不通，生成可发送的报告"
+  ui_item 10 "BBR + FQ 拥塞控制"  "一键启用 / 禁用，独立于 sing-box"
+  ui_item 0  "退出"               ""
+  ui_rule "=" 62
   local choice
   choice=$(core_prompt "请选择 [0-10]")
   case "$choice" in
@@ -644,6 +673,7 @@ sb_show_menu() {
         service_restart; ok "sing-box 已重启"
       fi
       node_gen || true
+      SB_KEEP_SCREEN=1   # 节点已打印：让 main_menu 保留屏幕，别 clear 掉
       ;;
     7) sb_version_menu || true ;;
     8) sb_self_update || true ;;
@@ -658,7 +688,18 @@ main_menu() {
   core_root_check
   while true; do
     sb_show_menu || true
-    echo ""
+    # 上一轮打印了节点（SB_KEEP_SCREEN=1）时不清屏：先等用户看完/复制完，
+    # 回车才重新画菜单。直接进下一轮的话 sb_show_menu 开头的 clear 会把节点刷没，
+    # 安卓端尤其明显——屏幕上什么都没有，用户以为节点没打印出来。
+    if [[ -n "${SB_KEEP_SCREEN:-}" ]]; then
+      unset SB_KEEP_SCREEN
+      echo ""
+      info "节点已保留在屏幕上，可长按复制；看完回车返回菜单（Ctrl+C 退出）"
+      read -r _ || true
+      clear 2>/dev/null || true
+    else
+      echo ""
+    fi
   done
 }
 

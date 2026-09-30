@@ -16,9 +16,161 @@ fi
 
 # ---------- 日志 ----------
 info()  { printf '%s[INFO]%s %s\n'  "$C_BLU" "$C_RST" "$*"; }
-ok()    { printf '%s[ OK ]%s %s\n'  "$C_GRN" "$C_RST" "$*"; }
-warn()  { printf '%s[WARN]%s %s\n'  "$C_YEL" "$C_RST" "$*"; }
-error() { printf '%s[ERR ]%s %s\n'  "$C_RED" "$C_RST" "$*" >&2; }
+
+# ---------- 终端宽度 / 剪贴板 ----------
+# 终端列数：tput cols → $COLUMNS → stty size 三级回退，最后默认 80。
+# 非 tty（重定向到文件/管道）时 tput 会失败或返回 0，故必须逐级校验。
+# 下限 20 保证极窄终端下分段逻辑不会死循环；上限 400 防止异常值导致整行不折行。
+core_term_width() {
+  local w=""
+  [[ -t 1 ]] && w=$(tput cols 2>/dev/null || true)
+  [[ "$w" =~ ^[0-9]+$ ]] || w=${COLUMNS:-}
+  if [[ ! "$w" =~ ^[0-9]+$ ]]; then
+    w=$(stty size 2>/dev/null | cut -d' ' -f2)
+  fi
+  [[ "$w" =~ ^[0-9]+$ ]] || w=80
+  (( w < 20 ))  && w=20
+  (( w > 400 )) && w=400
+  echo "$w"
+}
+
+# 字符串在终端里占的**显示列数**（CJK/全角字符算 2 列，ASCII 算 1 列）。
+# 用 `${s//[[:ascii:]]/}` 把 ASCII 字符全部剥掉，剩下的就是非 ASCII 字符，
+# 于是 显示宽度 = 字符数 + 非 ASCII 字符数。
+# 为什么不用 wc -m/awk：mawk/busybox awk 在多字节下按字节处理（实测
+# `length()` 对中文返回字节数，算出 121 而不是 61），而 busybox wc -m 又
+# 未必按字符计数。纯 bash 参数展开在所有实现上行为一致，且无需 fork。
+# 注意：调用方须在 UTF-8 locale 下运行（C.UTF-8 通常恒在），否则 ${#s} 是字节数。
+core_dwidth() {
+  local s=${1-} na
+  na=${s//[[:ascii:]]/}
+  echo $(( ${#s} + ${#na} ))
+}
+
+# 按显示宽度裁剪字符串到 at most w 列，超出时以 "…" 结尾（本身已含 ANSI 颜色码时
+# 由调用方先剥色再算宽，故这里按纯文本处理）。
+core_dcut() {
+  local s=${1-} w=${2:-0}
+  (( w <= 0 )) && { echo ""; return 0; }
+  (( $(core_dwidth "$s") <= w )) && { echo "$s"; return 0; }
+  # 逐字符累加显示宽度，保留到 w-2 列 + 省略号（避免切出半个多字节字符）。
+  # 预留 2 列给 "…"：按本文件的宽度公式非 ASCII 一律算 2 列，宁可少留也不溢出。
+  local out="" i c n=${#s} acc=0 limit=$(( w - 2 ))
+  for (( i = 0; i < n; i++ )); do
+    c=${s:i:1}
+    if [[ "$c" == *[![:ascii:]]* ]]; then acc=$(( acc + 2 )); else acc=$(( acc + 1 )); fi
+    (( acc > limit )) && break
+    out+=$c
+  done
+  echo "${out}…"
+}
+
+# 画一条横线，宽度自动取 min(终端宽, maxw)，保证任何终端上都不会折行。
+ui_rule() {
+  local ch=${1:--} maxw=${2:-62} w line=""
+  w=$(core_term_width)
+  (( w > maxw )) && w=$maxw
+  (( w < 8 )) && w=8
+  while (( ${#line} < w )); do line+="$ch"; done
+  printf '%s\n' "${line:0:w}"
+}
+
+# ---------- 自适应面板（v1.5.5） ----------
+#
+# 背景：老面板把宽度硬编码成 62 列（"=" * 62），而中文标签是双宽字符，
+# 于是「升级内核版本 (适配 sing-box 1.14.x，升到最新补丁)」这类行实际占 61 列，
+# 一旦终端窄于它（比如安卓手机竖屏常见的 40~50 列），终端就会**软换行**：
+# 一行变两行，21 行的面板被撑到 30+ 行，超出手机可视高度，clear 后重绘又把
+# 顶部顶出屏幕——用户长按复制时拿到的就只有下半截（表现为菜单在「[8] 更新脚本」
+# 之后被截断）。
+#
+# 这里改成两件事，与「减少菜单行数」无关：
+#   1) 所有横线宽度跟随终端（ui_rule），窄屏自动变窄，不再溢出；
+#   2) 所有带说明的长行按可用宽度**主动截断/缩排**，宁可少显示几个字的括号说明，
+#      也不允许终端替我们折行——保证「一行就是一行」，复制永远拿得全。
+# 宽屏（>=62）下输出与老版本一致。
+#
+# 用法：ui_banner <标题> <副标题>
+#       ui_field <标签> <值...>          单行，必要时截断
+#       ui_item <编号> <名称> <说明>       菜单项；窄屏时说明另起缩排行
+ui_banner() {
+  local w; w=$(core_term_width); (( w > 62 )) && w=62
+  ui_rule "=" "$w"
+  # 标题 + 副标题；整体先截到 w 列，再按显示宽度居中（CJK 宽度已计入）
+  local t tw pad
+  t=$(core_dcut "$1  $2" "$w")
+  tw=$(core_dwidth "$t")
+  pad=$(( (w - tw) / 2 )); (( pad < 0 )) && pad=0
+  printf '%*s%s%s\n' "$pad" "" "${C_BOLD}" "$t${C_RST}"
+  ui_rule "-" "$w"
+}
+
+# 单行字段：标签定宽 + 值截断到可用宽度（1 起始列 + 标签 + 冒号空格）。
+# 注意值必须用 $( ) 捕获——core_dcut 自身会 echo 换行，直接调用会多出一空行。
+ui_field() {
+  local label=$1; shift
+  local w; w=$(core_term_width); (( w > 62 )) && w=62
+  local lw pad
+  lw=$(core_dwidth "$label")
+  pad=$(( 10 - lw )); (( pad < 1 )) && pad=1
+  printf ' %s%*s: %s\n' "$label" "$pad" "" "$(core_dcut "$*" $(( w - lw - pad - 3 )))"
+}
+
+# 缩排注释行：按 [ind] 缩进打印一段带颜色的文本，并按「终端宽 - 缩进」截断。
+# 面板里的版本告警/脚本版本状态都用它，避免各处自己算可用宽度而算错
+# （早期版本就是固定缩进 11/13 列 + 按另一个缩进算出的 avail 相减，导致超宽）。
+# 用法：ui_note <颜色变量名> <文本> [缩进列数，默认 11]
+ui_note() {
+  local color=$1 text=$2 ind=${3:-11} w avail
+  w=$(core_term_width); (( w > 62 )) && w=62
+  (( ind > w - 4 )) && ind=$(( w > 5 ? w - 4 : 1 ))
+  avail=$(( w - ind )); (( avail < 4 )) && avail=4
+  printf '%*s%s%s\n' "$ind" "" "$color" "$(core_dcut "$text" "$avail")"
+}
+
+# 菜单项：窄屏（可用宽度不足以容纳「说明」）时把说明放到下一行缩排显示，
+# 而不是丢给终端折行——这样每一行的物理宽度都受控，面板总高度可控。
+ui_item() {
+  local num=$1 name=$2 desc=${3-} w lw dw indent=5 col
+  w=$(core_term_width); (( w > 62 )) && w=62
+  local head; head=$(core_dcut " [${num}] ${name}" $(( w - 1 )))
+  if [[ -z "$desc" ]]; then
+    printf '%s\n' "$head"
+    return 0
+  fi
+  lw=$(core_dwidth "$head")
+  dw=$(core_dwidth "$desc")
+  # 缩排：至少留 8 列给说明，极窄终端（<20 列）才收窄
+  indent=$(( lw + 2 )); (( indent > 8 )) && indent=8
+  (( indent > w - 6 )) && indent=$(( w > 6 ? w - 6 : 1 ))
+  (( indent < 2 )) && indent=2
+
+  if (( lw + 2 + dw <= w - 1 )); then
+    # 宽屏：说明与标题同行（保持原有观感）。
+    # 注意预算要算上括号：desc 实际打印为 "(desc)"，共 dw+2 列。
+    col=$(( lw + 2 ))
+    printf '%s%*s(%s)\n' "$head" 2 "" "$(core_dcut "$desc" $(( w - 2 - col )))"
+    return 0
+  fi
+
+  # 窄屏：说明另起缩排行，并按「缩排后的可用宽度」自己折行——不交给终端折
+  printf '%s\n' "$head"
+  local avail=$(( w - indent - 1 ))
+  (( avail < 4 )) && avail=4
+  local line="" acc=0 cw i c n
+  n=${#desc}
+  for (( i = 0; i < n; i++ )); do
+    c=${desc:i:1}
+    [[ "$c" == *[![:ascii:]]* ]] && cw=2 || cw=1
+    if (( acc + cw > avail )); then
+      printf '%*s%s\n' "$indent" "" "$line"
+      line=""; acc=0
+    fi
+    line+=$c; acc=$(( acc + cw ))
+  done
+  [[ -n "$line" ]] && printf '%*s%s\n' "$indent" "" "$line"
+  return 0
+}
 
 # ---------- 全局路径 ----------
 SB_BIN="/usr/local/bin/sing-box"
