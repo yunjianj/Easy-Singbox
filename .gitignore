@@ -1,6 +1,45 @@
-# 本地状态/记忆，不入库
+# ===== 本地私有状态 / 工具产物 =====
+# AI 工具与助手的本地状态目录（绝不入库）
 .workbuddy/
-*.tar.gz
-# 脚本运行时产物（版本检测缓存等）
+.worktree/
+.claude/
+.cursor/
+
+# ===== 脚本运行时产物 =====
+# 版本检测/自更新缓存（sb 自更新时写）
 .script_ver
 .script_ver_*
+# 升级内核时留下的旧二进制备份
+*.bak
+# 一键引导 sb.sh 下载的整包
+*.tar.gz
+
+# ===== 开发 / 测试本地产物 =====
+# 开发机 mock 的内核二进制（仅用于驱动 config_rebuild_from_state + node_gen）
+mock-sing-box
+mock-sing-box.*
+# 在仓库根手工试跑生成的东西（config.json 一律由 config_gen 生成，禁止入库）
+/config.json
+/nodes.txt
+/.state
+# 诊断报告副本
+diag.log
+diag-*.log
+*.report
+
+# ===== 凭证 / 私密配置（兜底，线上在 /etc/sing-box 不受此影响）=====
+.env
+*.env
+!*.env.example
+/id_rsa
+*.pem
+*.key
+
+# ===== 编辑器 / 操作系统 =====
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

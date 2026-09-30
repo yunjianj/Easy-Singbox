@@ -47,7 +47,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 > Alpine 3.21+ 的 `ss` 位于独立子包 `iproute2-ss`，脚本会自动补装；手动安装可用 `apk add iproute2 iproute2-ss`。
 
 - `sing-box`（从 GitHub Releases 下载，**只适配 1.14.x 内核**（v1.5.0 起单一基线；安装/升级自动取 1.14 大版本下最新补丁，不再支持手动切换其它大版本），下载后比对 GitHub Release API 官方 digest（sha256），校验失败即拒绝安装）
-- **内核基线（v1.5.0 起）**：本脚本只适配 sing-box **1.14.x**（`SB_VER_BASE=1.14`）。所有协议一律按该大版本的最新稳定内核语法编写，**无多版本语法分支、无按版本裁剪协议**。主面板会做版本支持检测：已装内核低于 1.14 时红字提示，执行选项 7 一键升级到 1.14.x 最新即可。历史上 1.13/1.14 双分支（v1.3.0）、大版本切换自动重建（v1.3.1）、按版本裁剪协议（v1.3.3）等机制已随 v1.5.0 移除。详见 `DEVELOPMENT.md`。
+- **内核基线（v1.5.0 起）**：本脚本只适配 sing-box **1.14.x**（`SB_VER_BASE=1.14`）。所有协议一律按该大版本的最新稳定内核语法编写，**无多版本语法分支、无按版本裁剪协议**。主面板会做版本支持检测：已装内核低于 1.14 时红字提示，执行选项 7 一键升级到 1.14.x 最新即可。历史上 1.13/1.14 双分支（v1.3.0）、大版本切换自动重建（v1.3.1）、按版本裁剪协议（v1.3.3）等机制已随 v1.5.0 移除。详见 `AGENTS.md`。
 - `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
 - `ncurses`（可选，提供 `tput` 彩色输出与 `tput cols` 终端宽度；缺失时静默降级为无色，宽度回退到 `$COLUMNS`/`stty size`/默认 80，不影响功能。Alpine 上安装：`apk add ncurses`）
 
@@ -240,7 +240,7 @@ easy-singbox/
 │   ├── diag.sh         # 一键诊断（选项 9 / sb debug）
 │   └── protocol/       # anytls / hysteria2 / tuic / socks 片段
 ├── templates/config.json.tpl
-├── DEVELOPMENT.md  # 开发指南（协议适配约定、代码组织）
+├── AGENTS.md        # 开发约定（协议适配约定、代码组织，供维护者/AI 代理阅读）
 ├── README.md
 └── TESTING.md
 ```
