@@ -15,7 +15,12 @@ else
 fi
 
 # ---------- 日志 ----------
+# 注意：三个日志函数的颜色都**必须自带 C_RST** 收尾，否则颜色会「漏」到后续
+# 所有输出（面板菜单项、提示符全被染色）。v1.5.5 面板整屏发绿就是这个原因。
 info()  { printf '%s[INFO]%s %s\n'  "$C_BLU" "$C_RST" "$*"; }
+ok()    { printf '%s[ OK ]%s %s\n'  "$C_GRN" "$C_RST" "$*"; }
+warn()  { printf '%s[WARN]%s %s\n'  "$C_YEL" "$C_RST" "$*"; }
+error() { printf '%s[ERR ]%s %s\n'  "$C_RED" "$C_RST" "$*" >&2; }
 
 # ---------- 终端宽度 / 剪贴板 ----------
 # 终端列数：tput cols → $COLUMNS → stty size 三级回退，最后默认 80。
@@ -121,11 +126,14 @@ ui_field() {
 # （早期版本就是固定缩进 11/13 列 + 按另一个缩进算出的 avail 相减，导致超宽）。
 # 用法：ui_note <颜色变量名> <文本> [缩进列数，默认 11]
 ui_note() {
-  local color=$1 text=$2 ind=${3:-11} w avail
+  local color=$1 text=$2 ind=${3:-11} w avail rst=""
   w=$(core_term_width); (( w > 62 )) && w=62
   (( ind > w - 4 )) && ind=$(( w > 5 ? w - 4 : 1 ))
   avail=$(( w - ind )); (( avail < 4 )) && avail=4
-  printf '%*s%s%s\n' "$ind" "" "$color" "$(core_dcut "$text" "$avail")"
+  # 行尾必须复位：漏掉 C_RST 会让这一行的颜色（如「[已是最新]」的绿色）
+  # 一直延续到后面的所有菜单项，面板就变成整屏绿字。v1.5.5 的回归即此。
+  [[ -n "$color" ]] && rst="$C_RST"
+  printf '%*s%s%s%s\n' "$ind" "" "$color" "$(core_dcut "$text" "$avail")" "$rst"
 }
 
 # 菜单项：窄屏（可用宽度不足以容纳「说明」）时把说明放到下一行缩排显示，
