@@ -121,6 +121,29 @@ ui_field() {
   printf ' %s%*s: %s\n' "$label" "$pad" "" "$(core_dcut "$*" $(( w - lw - pad - 3 )))"
 }
 
+# 单行字段 + 同行状态注记：<标签> <值> <颜色变量名> <注记文本>
+# 面板「脚本版本 : v1.5.6  [已是最新]」必须与旧版一样**同行**显示；
+# v1.5.5 用 ui_field + ui_note(缩排 15) 拼两行，注记被挤到下一行，观感回退，
+# v1.5.6 改用本函数：先按值区预算截断值，再把注记放进「值尾 +2 列」之后的剩余宽度，
+# 剩余不足 4 列时直接省略注记（宁可少显示，也绝不超宽）。
+ui_field_note() {
+  local label=$1 value=$2 color=$3 text=$4 w lw pad vcol val ncol avail rst=""
+  w=$(core_term_width); (( w > 62 )) && w=62
+  lw=$(core_dwidth "$label")
+  pad=$(( 10 - lw )); (( pad < 1 )) && pad=1
+  vcol=$(( 1 + lw + pad + 2 ))          # 值区起始列（与 ui_field 的排版一致）
+  val=$(core_dcut "$value" $(( w - vcol )))
+  ncol=$(( vcol + $(core_dwidth "$val") + 2 ))
+  avail=$(( w - ncol ))
+  if [[ -n "$text" ]] && (( avail >= 4 )); then
+    [[ -n "$color" ]] && rst="$C_RST"   # 行尾必须复位，否则颜色漏到后续所有行
+    printf ' %s%*s: %s  %s%s%s\n' "$label" "$pad" "" "$val" \
+      "$color" "$(core_dcut "$text" "$avail")" "$rst"
+  else
+    printf ' %s%*s: %s\n' "$label" "$pad" "" "$val"
+  fi
+}
+
 # 缩排注释行：按 [ind] 缩进打印一段带颜色的文本，并按「终端宽 - 缩进」截断。
 # 面板里的版本告警/脚本版本状态都用它，避免各处自己算可用宽度而算错
 # （早期版本就是固定缩进 11/13 列 + 按另一个缩进算出的 avail 相减，导致超宽）。

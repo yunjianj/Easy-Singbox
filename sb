@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.5.6"
+SB_SCRIPT_VERSION="1.5.7"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -620,14 +620,16 @@ sb_show_menu() {
       ui_note "" "需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级" 11
     fi
   fi
+  # 脚本版本：值与状态注记同行显示（与旧版一致）。用 ui_field_note 而不是
+  # ui_field + ui_note，否则注记会被缩排到下一行（v1.5.5 的观感回退）。
   case "$vstat" in
-    latest)   ui_field "脚本版本" "v${SB_SCRIPT_VERSION}"
-              ui_note "$C_GRN" "[已是最新]" 15 ;;
+    latest)   ui_field_note "脚本版本" "v${SB_SCRIPT_VERSION}" \
+                "$C_GRN" "[已是最新]" ;;
     update:*) local nv="${vstat#update:}"
-              ui_field "脚本版本" "v${SB_SCRIPT_VERSION}"
-              ui_note "$C_RED" "[发现新版本 v${nv}，可执行选项 8 更新]" 15 ;;
-    *)        ui_field "脚本版本" "v${SB_SCRIPT_VERSION}"
-              ui_note "$C_YEL" "[远程版本未知，请检查网络]" 15 ;;
+              ui_field_note "脚本版本" "v${SB_SCRIPT_VERSION}" \
+                "$C_RED" "[发现新版本 v${nv}，可执行选项 8 更新]" ;;
+    *)        ui_field_note "脚本版本" "v${SB_SCRIPT_VERSION}" \
+                "$C_YEL" "[远程版本未知，请检查网络]" ;;
   esac
   ui_rule "-" 62
   if [[ -x "$SB_BIN" ]]; then

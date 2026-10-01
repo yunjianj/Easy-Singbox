@@ -41,8 +41,10 @@ render_panel() {
       ui_note "" "需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级" 15
     fi
   fi
-  ui_field "脚本版本" "v1.5.5"
-  ui_note "" "[发现新版本 v${nv}，可执行选项 8 更新]" 15
+  # 「脚本版本 : v1.5.5  [发现新版本 ...]」必须同行（v1.5.6 修复换行回退）
+  ui_field_note "脚本版本" "v1.5.5" "" "[发现新版本 v${nv}，可执行选项 8 更新]"
+  ui_field_note "脚本版本" "v1.5.5" "" "[已是最新]"
+  ui_field_note "脚本版本" "v1.5.5" "" "[远程版本未知，请检查网络]"
   ui_rule "-" 62
   ui_item 1  "卸载 Sing-Box"        ""
   ui_item 2  "变更代理配置"         "协议 / 端口 / 凭证"
@@ -79,8 +81,20 @@ for W in 20 24 30 35 40 45 50 55 60 62 72 80 100 120; do
       (( d > limit )) && printf '        超宽(%d): %s\n' "$d" "$l"
     done <<< "$out"
   fi
+  # 同行断言：脚本版本的值与状态注记必须同行显示（v1.5.6 修复换行观感回退）
+  # 极窄终端（<30 列）值区之后放不下 4 列注记，此时按设计省略注记而非折行
+  (( W < 30 )) && continue
+  while IFS= read -r l; do
+    case "$l" in
+      *脚本版本*)
+        case "$l" in
+          *"v1.5.5  ["*) ;;
+          *) printf '[FAIL] COLUMNS=%-4s 脚本版本注记未同行: %s\n' "$W" "$l"; fail=1 ;;
+        esac ;;
+    esac
+  done <<< "$out"
 done
 
 echo "-----"
-if (( fail )); then echo "结果: 有宽度溢出"; exit 1; fi
-echo "结果: 全部宽度均无溢出"
+if (( fail )); then echo "结果: 面板存在宽度溢出或同行断言失败"; exit 1; fi
+echo "结果: 全部宽度均无溢出，且脚本版本注记同行显示"
