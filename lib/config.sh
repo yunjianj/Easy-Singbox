@@ -300,7 +300,7 @@ config_rebuild_from_state() {
   [[ -f "$SB_CONF" ]] && cp -f "$SB_CONF" "$bak" 2>/dev/null || true
   if config_gen "$DOMAIN" "$PORT_ANYTLS" "$PORT_HY2" "$PORT_TUIC" \
                 "$PASS_ANYTLS" "$PASS_HY2" "$PASS_TUIC" "$UUID_TUIC" \
-                "$OBS_HY2" "$HOP_HY2" "$PROTOS" "$PORT_SOCKS" \
+                "${OBS_HY2:-}" "${HOP_HY2:-}" "$PROTOS" "$PORT_SOCKS" \
                 "$USER_SOCKS" "$PASS_SOCKS"; then
     rm -f "$bak" 2>/dev/null || true
     return 0

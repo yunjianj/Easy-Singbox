@@ -156,7 +156,9 @@ service_start() {
   # 重启服务后重新应用 Hysteria2 端口跳跃重定向（如已配置）
   if [[ -f "$SB_STATE" ]]; then
     set -a; . "$SB_STATE"; set +a
-    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
+    # 用 ${HOP_HY2:-}：跳跃未启用/生效时 config_gen 会把该键从 .state 删除，
+    # set -u（sb 顶层 set -euo pipefail）下裸引用会报 unbound variable 直接中止。
+    [[ -n "${HOP_HY2:-}" && -n "${PORT_HY2_LISTEN:-}" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
   fi
   # 健康检查：等待服务真正 active（最多 15s），否则打印日志并失败，避免“假成功”
   local i
@@ -178,7 +180,9 @@ service_start_openrc() {
   # 重新应用端口跳跃（与 systemd 分支一致）
   if [[ -f "$SB_STATE" ]]; then
     set -a; . "$SB_STATE"; set +a
-    [[ -n "$HOP_HY2" && -n "$PORT_HY2_LISTEN" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
+    # 用 ${HOP_HY2:-}：跳跃未启用/生效时 config_gen 会把该键从 .state 删除，
+    # set -u（sb 顶层 set -euo pipefail）下裸引用会报 unbound variable 直接中止。
+    [[ -n "${HOP_HY2:-}" && -n "${PORT_HY2_LISTEN:-}" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
   fi
   # 健康检查：等待服务起来（最多 15s），否则打印日志并失败
   local i
@@ -234,7 +238,11 @@ service_verify_ports() {
     if [[ -n "$pa" ]] && [[ "$tcp" != *" $pa "* ]]; then okall=0; fi
     if [[ -n "$ph" ]] && [[ "$udp" != *" $ph "* ]]; then okall=0; fi
     if [[ -n "$pt" ]] && [[ "$udp" != *" $pt "* ]]; then okall=0; fi
-    if [[ -n "$ps" ]] && { [[ "$tcp" != *" $ps "* ]] || [[ "$udp" != *" $ps "* ]]; }; then okall=0; fi
+    # SOCKS5 只校验 TCP：sing-box 启动时 socks inbound 仅 bind TCP
+    # （protocol/socks/inbound.go: Network: []string{NetworkTCP}）；udp 要等客户端
+    # 发起 UDP ASSOCIATE 才在同一端口懒绑定，启动态静态检测必然看不到，
+    # 拿它判失败就是误报（曾导致安装被误中止）。
+    if [[ -n "$ps" ]] && [[ "$tcp" != *" $ps "* ]]; then okall=0; fi
     [[ "$okall" -eq 1 ]] && break
     sleep 0.5
   done
@@ -249,7 +257,7 @@ service_verify_ports() {
     if [[ "$udp" == *" $pt "* ]]; then ok "TUIC 监听正常 udp/$pt"; else error "TUIC 未监听 udp/$pt"; bad=1; fi
   fi
   if [[ -n "$ps" ]]; then
-    if [[ "$tcp" == *" $ps "* && "$udp" == *" $ps "* ]]; then ok "SOCKS5 监听正常 tcp+udp/$ps（明文，无 TLS）"; else error "SOCKS5 未监听 tcp+udp/$ps"; bad=1; fi
+    if [[ "$tcp" == *" $ps "* ]]; then ok "SOCKS5 监听正常 tcp/$ps（明文，无 TLS）"; else error "SOCKS5 未监听 tcp/$ps"; bad=1; fi
   fi
   if (( bad )); then
     error "存在未监听的端口，客户端会报 connection refused。当前监听情况："

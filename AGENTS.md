@@ -84,11 +84,18 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 | a | anytls | tcp | password | 强制 TLS |
 | b | hysteria2 | udp | password | 强制 TLS |
 | c | tuic | udp | uuid+password | 强制 TLS |
-| d | socks | tcp+udp | user+password | 明文（sing-box socks 无 tls 字段） |
+| d | socks | tcp（udp 按需） | user+password | 明文（sing-box socks 无 tls 字段）；启动只 bind tcp，UDP ASSOCIATE 时才懒绑定 udp，**静态检测不到 udp 属正常** |
 
 **生成集 = 用户选择(PROTOS)**。`.state` 的 `PROTOS` 保存用户原始字母选择；
 `config_gen` / `node_gen` / `diag` 全部只依据 `PROTOS` 生成对应 inbound 与 URI
 （不再受已装内核版本影响——安装/升级已保证内核恒为 `SB_VER_BASE.x`）。
+
+**端口监听校验只能用启动态确定存在的东西**（v1.5.8 起明确）：SOCKS5 启动时
+sing-box 只 bind tcp（`protocol/socks/inbound.go` 里 `Network: []string{NetworkTCP}`），
+udp 是客户端发起 UDP ASSOCIATE 时由 `Listener.ListenPacket` 在同一端口**懒绑定**的。
+所以 `service_verify_ports` 对 socks **只查 tcp**；用静态 `ss` 查 udp 必然查不到，
+拿它判失败就是误报（历史上真把安装误中止过）。防火墙仍需 tcp+udp 都放行，
+否则客户端一旦用 UDP ASSOCIATE 就失败。
 
 ### 2.3 新增协议步骤
 
@@ -185,5 +192,6 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 | 按内核版本裁剪协议（v1.3.3） | 已移除，协议集只由用户 `PROTOS` 决定 |
 | 面板宽度自适应（`ui_*` + `core_dcut`，v1.5.5~v1.5.6） | 已回退（2026-10-01）：截断掉 IP/地区与状态提示，面板回固定 62 列写法 |
 | `test_width.sh` 宽度回归 | 随上面一起删除，无自动化测试，按 `TESTING.md` 人工验证 |
+| 用静态 `ss` 检测 SOCKS5 的 udp 监听并据此判失败 | 已移除（v1.5.8）：udp 是 UDP ASSOCIATE 懒绑定的，静态检测必误报，曾把安装误中止 |
 | `templates/config.json.tpl` | 无引用，勿依赖 |
 | 订阅链接 / 剪贴板写入 / 节点分段 | 产品边界，永不做 |

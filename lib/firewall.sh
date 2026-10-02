@@ -150,7 +150,8 @@ fw_apply_choice() {
       [[ -n "$p_any" ]] && fw_open_port tcp "$p_any" permanent
       [[ -n "$p_hy2" ]] && fw_open_port udp "$p_hy2" permanent
       [[ -n "$p_tuic" ]] && fw_open_port udp "$p_tuic" permanent
-      # SOCKS5 同时监听 TCP(握手) 与 UDP(UDP ASSOCIATE 转发)，两个协议都要放行。
+      # SOCKS5 需 tcp+udp 都放行：启动时只 bind tcp，但客户端发起 UDP ASSOCIATE 时
+      # sing-box 会在同一端口懒绑定 udp（见 lib/protocol/socks.sh 注释）。
       [[ -n "$p_socks" ]] && fw_open_port tcp "$p_socks" permanent
       [[ -n "$p_socks" ]] && fw_open_port udp "$p_socks" permanent
       ok "已通过 $FW_BACKEND 开放 22(SSH) + 80 + 已启用协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"

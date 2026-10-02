@@ -222,8 +222,9 @@ core_proto_display() {
   esac
 }
 
-# 协议名 -> 传输层（防火墙放行与端口校验用）
-# SOCKS5 同时使用 TCP（握手）与 UDP（UDP ASSOCIATE 转发），故为 tcp/udp。
+# 协议名 -> 传输层（防火墙放行用）
+# SOCKS5 为 tcp/udp：启动时 sing-box 只 bind tcp，但客户端发起 UDP ASSOCIATE 时会在
+# 同一端口懒绑定 udp，故防火墙两个协议都需放行（端口校验则只查 tcp，见 service.sh）。
 core_proto_transport() {
   case "$1" in
     hysteria2|tuic) echo udp ;;

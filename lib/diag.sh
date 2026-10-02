@@ -152,16 +152,19 @@ diag_collect() {
         echo "TUIC      udp/${PORT_TUIC:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
       if [[ "$_sup" == *" socks "* ]]; then
-        if diag_port_listening tcp "${PORT_SOCKS:-0}" && diag_port_listening udp "${PORT_SOCKS:-0}"; then
-          echo "SOCKS5    tcp+udp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
+        # 只判 tcp：sing-box 启动时 socks inbound 仅 bind TCP，udp 是客户端发起
+        # UDP ASSOCIATE 时才在同一端口懒绑定的，静态检测不到属正常（勿误报未监听）。
+        if diag_port_listening tcp "${PORT_SOCKS:-0}"; then
+          echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
+          echo "           └ 说明：udp/${PORT_SOCKS:-?} 为 UDP ASSOCIATE 懒绑定，客户端未发起时检测不到属正常"
           if [[ -z "${USER_SOCKS:-}" || -z "${PASS_SOCKS:-}" ]]; then
             echo "           └ [风险] 未设置用户名/密码 = 开放代理，任何人可直接使用，请尽快启用认证"
           fi
         else
-          echo "SOCKS5    tcp+udp/${PORT_SOCKS:-?} : [异常] 未监听"
+          echo "SOCKS5    tcp/${PORT_SOCKS:-?} : [异常] 未监听"
         fi
       else
-        echo "SOCKS5    tcp+udp/${PORT_SOCKS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
+        echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
     ) || true
   fi
@@ -171,21 +174,25 @@ diag_collect() {
     (
       set +u
       . "$SB_STATE" 2>/dev/null || true
-      local p="${PORT_ANYTLS:-}"
-      if [[ -n "$p" ]]; then
+      # TCP 类协议才可 connect 自测：AnyTLS / SOCKS5（1.14 内核 socks 仅 TCP）
+      local p name myip pair
+      for pair in "${PORT_ANYTLS:-}:AnyTLS/tcp" "${PORT_SOCKS:-}:SOCKS5/tcp"; do
+        p=${pair%%:*}; name=${pair#*:}
+        [[ -n "$p" ]] || continue
         if timeout 3 bash -c "exec 3<>/dev/tcp/127.0.0.1/$p" 2>/dev/null; then
-          echo "127.0.0.1:$p (AnyTLS/tcp) 可连接 → 进程在收，问题在防火墙/安全组"
+          echo "127.0.0.1:$p ($name) 可连接 → 进程在收，问题在防火墙/安全组"
         else
-          echo "127.0.0.1:$p (AnyTLS/tcp) 不可连接 → 进程没在收，问题在服务本身"
+          echo "127.0.0.1:$p ($name) 不可连接 → 进程没在收，问题在服务本身"
         fi
-        # 显式测 IPv4 外部地址，验证 listen "::" 是否覆盖 IPv4
-        local myip; myip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' || true)
-        if [[ -n "$myip" ]]; then
-          if timeout 3 bash -c "exec 3<>/dev/tcp/$myip/$p" 2>/dev/null; then
-            echo "$myip:$p (本机 IPv4 地址) 可连接 → IPv4 栈正常"
-          else
-            echo "$myip:$p (本机 IPv4 地址) 不可连接 → 可能仅监听 IPv6（检查 bindv6only）或本机防火墙拦截"
-          fi
+      done
+      # 显式测 IPv4 外部地址，验证 listen "::" 是否覆盖 IPv4
+      myip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}' || true)
+      if [[ -n "$myip" && -n "${PORT_ANYTLS:-}" ]]; then
+        p=$PORT_ANYTLS
+        if timeout 3 bash -c "exec 3<>/dev/tcp/$myip/$p" 2>/dev/null; then
+          echo "$myip:$p (本机 IPv4 地址) 可连接 → IPv4 栈正常"
+        else
+          echo "$myip:$p (本机 IPv4 地址) 不可连接 → 可能仅监听 IPv6（检查 bindv6only）或本机防火墙拦截"
         fi
       fi
     ) || true
@@ -287,34 +294,62 @@ diag_verdict() {
     set +u
     if [[ ! -f "$SB_STATE" ]]; then echo "未找到状态文件，无法给出结论。"; return 0; fi
     . "$SB_STATE" 2>/dev/null || true
-    local pa="${PORT_ANYTLS:-0}" ph="${PORT_HY2_LISTEN:-${PORT_HY2:-0}}" pt="${PORT_TUIC:-0}"
-    local svc_up=0 pa_ok=-1 ph_ok=-1 pt_ok=-1 local_ok=0 ext_ok=0 myip=""
+    local pa="${PORT_ANYTLS:-}" ph="${PORT_HY2_LISTEN:-${PORT_HY2:-}}" pt="${PORT_TUIC:-}" ps="${PORT_SOCKS:-}"
+    local svc_up=0 pa_ok=-1 ph_ok=-1 pt_ok=-1 ps_ok=-1 local_ok=0 ext_ok=0 myip=""
+    local probe_port="" bad=0 v
     service_is_active && svc_up=1 || svc_up=0
     if command -v ss >/dev/null 2>&1; then
-      core_port_in_use "$pa" tcp && pa_ok=1 || pa_ok=0
-      core_port_in_use "$ph" udp && ph_ok=1 || ph_ok=0
-      core_port_in_use "$pt" udp && pt_ok=1 || pt_ok=0
+      [[ -n "$pa" ]] && { core_port_in_use "$pa" tcp && pa_ok=1 || pa_ok=0; }
+      [[ -n "$ph" ]] && { core_port_in_use "$ph" udp && ph_ok=1 || ph_ok=0; }
+      [[ -n "$pt" ]] && { core_port_in_use "$pt" udp && pt_ok=1 || pt_ok=0; }
+      [[ -n "$ps" ]] && { core_port_in_use "$ps" tcp && ps_ok=1 || ps_ok=0; }
     fi
-    timeout 3 bash -c "exec 3<>/dev/tcp/127.0.0.1/$pa" 2>/dev/null && local_ok=1 || local_ok=0
-    myip=$(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || true)
-    [[ -n "$myip" ]] && { timeout 3 bash -c "exec 3<>/dev/tcp/$myip/$pa" 2>/dev/null && ext_ok=1 || ext_ok=0; }
+    # 自连只对 TCP 类协议有意义（UDP 无 connect 语义），取任一启用的 TCP 端口
+    [[ -n "$pa" ]] && probe_port=$pa
+    [[ -z "$probe_port" && -n "$ps" ]] && probe_port=$ps
+    if [[ -n "$probe_port" ]]; then
+      timeout 3 bash -c "exec 3<>/dev/tcp/127.0.0.1/$probe_port" 2>/dev/null && local_ok=1 || local_ok=0
+      myip=$(curl -s --max-time 6 https://api.ipify.org 2>/dev/null || true)
+      [[ -n "$myip" ]] && { timeout 3 bash -c "exec 3<>/dev/tcp/$myip/$probe_port" 2>/dev/null && ext_ok=1 || ext_ok=0; }
+    fi
+    # 只有“已启用却未监听”才算故障，未启用协议（-1）不参与结论
+    for v in "$pa_ok" "$ph_ok" "$pt_ok" "$ps_ok"; do [[ "$v" -eq 0 ]] && bad=1; done
+
+    _d_vfmt() {  # 名称 端口 状态 -> 摘要
+      case "$3" in
+        1) printf '%s(%s)=是' "$1" "$2" ;;
+        0) printf '%s(%s)=否' "$1" "$2" ;;
+        *) printf '%s=未启用' "$1" ;;
+      esac
+    }
 
     _d_sec "13. 自动结论"
     echo "服务运行            : $([[ $svc_up -eq 1 ]] && echo 是 || echo 否)"
-    echo "端口监听            : AnyTLS(tcp/$pa)=$([[ $pa_ok -eq 1 ]] && echo 是 || [[ $pa_ok -eq -1 ]] && echo 未知 || echo 否)  Hy2(udp/$ph)=$([[ $ph_ok -eq 1 ]] && echo 是 || [[ $ph_ok -eq -1 ]] && echo 未知 || echo 否)  TUIC(udp/$pt)=$([[ $pt_ok -eq 1 ]] && echo 是 || [[ $pt_ok -eq -1 ]] && echo 未知 || echo 否)"
-    echo "本机自连 127.0.0.1:$pa : $([[ $local_ok -eq 1 ]] && echo 通 || echo 不通)"
-    [[ -n "$myip" ]] && echo "公网自连 $myip:$pa     : $([[ $ext_ok -eq 1 ]] && echo 通 || echo 不通)"
+    local line="端口监听            : "
+    [[ -n "$pa" ]] && line="$line$(_d_vfmt "AnyTLS-tcp" "$pa" "$pa_ok")  "
+    [[ -n "$ph" ]] && line="$line$(_d_vfmt "Hy2-udp" "$ph" "$ph_ok")  "
+    [[ -n "$pt" ]] && line="$line$(_d_vfmt "TUIC-udp" "$pt" "$pt_ok")  "
+    [[ -n "$ps" ]] && line="$line$(_d_vfmt "SOCKS5-tcp" "$ps" "$ps_ok")  "
+    echo "$line"
+    if [[ -n "$probe_port" ]]; then
+      echo "本机自连 127.0.0.1:$probe_port : $([[ $local_ok -eq 1 ]] && echo 通 || echo 不通)"
+      [[ -n "$myip" ]] && echo "公网自连 $myip:$probe_port     : $([[ $ext_ok -eq 1 ]] && echo 通 || echo 不通)"
+    else
+      echo "本机/公网自连        : 跳过（未启用任何 TCP 类协议）"
+    fi
     echo "---- 结论 ----"
     if [[ $svc_up -ne 1 ]]; then
       echo "▶ 服务未运行 → 节点必然不通。查看“2.服务状态 / 3.日志”定位崩溃原因（常见：证书不可读、端口被占用、listen 绑定失败）。"
-    elif [[ $pa_ok -ne 1 || $ph_ok -ne 1 || $pt_ok -ne 1 ]]; then
-      echo "▶ 服务在运行但部分端口未监听 → 查看“3.日志”中 sing-box 启动报错（任一入站绑定失败会导致整个进程退出）。"
+    elif [[ $bad -eq 1 ]]; then
+      echo "▶ 服务在运行但部分端口未监听 → 查看“6.端口监听实况”与“3.日志”中 sing-box 启动报错（任一入站绑定失败会导致整个进程退出）。"
+    elif [[ -z "$probe_port" ]]; then
+      echo "▶ 已启用的协议均已监听（当前只启用了 UDP 类协议，无法用 TCP 自连测试）→ 请在客户端实测；若不通，优先检查云安全组/上游防火墙是否放行对应 UDP 端口。"
     elif [[ $local_ok -eq 1 && $ext_ok -ne 1 ]]; then
-      echo "▶ 进程在收包，但公网自连不通 → 问题在防火墙/云安全组未放行端口（或服务器的 bindv6only/路由问题）。请放行 TCP $pa、UDP $ph、UDP $pt，并确认云安全组同样放行；同时确认 net.ipv6.bindv6only=0（见“1.系统”）。"
+      echo "▶ 进程在收包，但公网自连不通 → 问题在防火墙/云安全组未放行端口（或服务器的 bindv6only/路由问题）。请放行已启用协议的对应端口，并确认云安全组同样放行；同时确认 net.ipv6.bindv6only=0（见“1.系统”）。"
     elif [[ $local_ok -ne 1 ]]; then
       echo "▶ 本机自连也不通 → 服务虽 active 但未真正监听（可能启动后崩溃重启中），查看“3.日志”。"
     else
-      echo "▶ 监听与自连均正常 → 问题大概率在客户端配置或客户端本地网络/代理。请核对 URI 与密码，并用 v2rayN 的“测试”功能查看详细错误。"
+      echo "▶ 监听与自连均正常 → 问题大概率在客户端配置或客户端本地网络/代理。请核对 URI 与密码，并用客户端的“测试”功能查看详细错误。"
     fi
   ) || true
 }

@@ -41,7 +41,9 @@ node_gen() {
     # 脚本用 nftables/iptables REDIRECT 把整个跳跃段重定向到基础监听端口，回包由 conntrack 自动还原
     # 源端口，客户端 mport 跳变完全可用（v1.0.7 曾据此移除 mport，实为误判——真正导致节点不通的
     # 是 DNS detour 崩溃，已于 v1.1.0 修复）。启用跳跃后需在云安全组放行整个 UDP 范围。
-    if [[ -n "$HOP_HY2" ]]; then
+    # 用 ${HOP_HY2:-}：跳跃未启用时该键会被 config_gen 从 .state 删掉，
+    # set -u 下裸引用会直接报错中断节点生成。
+    if [[ -n "${HOP_HY2:-}" ]]; then
       hy2_uri="${hy2_uri}&mport=${HOP_HY2}"
     fi
     hy2_uri="${hy2_uri}#${name}"
