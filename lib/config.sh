@@ -188,7 +188,7 @@ config_pick_protos() {
       anytls)    printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "TLS加密" >&2 ;;
       hysteria2) printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "TLS加密" >&2 ;;
       tuic)      printf '  [%s] %-10s %s  %s\n' "$l" "$name" "UDP" "TLS加密" >&2 ;;
-      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP/UDP" "明文" >&2 ;;
+      socks)     printf '  [%s] %-10s %s  %s\n' "$l" "$name" "TCP" "明文" >&2 ;;
     esac
   done
   while [[ -z "$picked" ]]; do
@@ -201,6 +201,8 @@ config_pick_protos() {
   if [[ " $picked " == *" socks "* ]]; then
     warn "SOCKS5 为明文协议（sing-box socks inbound 不支持 TLS），握手与目标地址可被链路识别。" >&2
     warn "已默认生成随机用户名与密码；若留空将关闭认证，等同开放代理，极易被扫描滥用。" >&2
+    warn "SOCKS5 仅 TCP 可用：其 UDP ASSOCIATE 走内核随机分配的临时端口（非本端口），" >&2
+    warn "  需放行整个临时端口范围才能穿透云安全组；需要 UDP 的流量请选 Hysteria2 / TUIC。" >&2
   fi
   # 回显字母串（规范化：仅保留有效字母并按 abcd 排序）
   core_protos_from_letters "$in" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' '

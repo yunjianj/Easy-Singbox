@@ -152,11 +152,11 @@ diag_collect() {
         echo "TUIC      udp/${PORT_TUIC:-?} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
       if [[ "$_sup" == *" socks "* ]]; then
-        # 只判 tcp：sing-box 启动时 socks inbound 仅 bind TCP，udp 是客户端发起
-        # UDP ASSOCIATE 时才在同一端口懒绑定的，静态检测不到属正常（勿误报未监听）。
+        # 只判 tcp：sing-box 启动时 socks inbound 仅 bind TCP。UDP ASSOCIATE 的转发
+        # 端口是内核分配的随机高位端口（非 listen_port），静态检测与固定放行都不适用。
         if diag_port_listening tcp "${PORT_SOCKS:-0}"; then
           echo "SOCKS5    tcp/${PORT_SOCKS:-?} : 监听中（明文，无 TLS）"
-          echo "           └ 说明：udp/${PORT_SOCKS:-?} 为 UDP ASSOCIATE 懒绑定，客户端未发起时检测不到属正常"
+          echo "           └ 说明：UDP ASSOCIATE 用内核随机分配的临时端口（非 ${PORT_SOCKS:-?}），需放行整个临时端口范围才可用；建议 UDP 走 Hy2/TUIC"
           if [[ -z "${USER_SOCKS:-}" || -z "${PASS_SOCKS:-}" ]]; then
             echo "           └ [风险] 未设置用户名/密码 = 开放代理，任何人可直接使用，请尽快启用认证"
           fi

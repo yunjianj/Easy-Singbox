@@ -58,7 +58,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 | a | AnyTLS (TCP) | TCP | password | 抗探测，需服务端默认 padding，强制 TLS |
 | b | Hysteria2 (QUIC) | UDP | password | 可选 salamander obfs，强制 TLS |
 | c | TUIC v5 (QUIC) | UDP | uuid + password | 双字段，强制 TLS |
-| d | SOCKS5 | TCP（UDP 按需） | user + password | **明文（官方无 TLS 字段）**，默认随机认证；启动只监听 TCP，客户端发起 UDP ASSOCIATE 时才在同一端口懒绑定 UDP |
+| d | SOCKS5 | TCP | user + password | **明文（官方无 TLS 字段）**，默认随机认证；仅 TCP 可用——其 UDP ASSOCIATE 走内核随机分配的临时端口，需放行整个临时端口范围才能穿透云安全组，不推荐 |
 
 - AnyTLS / Hysteria2 / TUIC 共用同一份 TLS 证书，由证书模块统一签发到 `/etc/sing-box/ssl/`。
 - 输入编号组合即可启用部分协议（如 `bc` 仅启用 Hysteria2 + TUIC）；SOCKS5 是唯一不受强制 TLS 约束的协议，启用前会显著告警，默认生成随机用户名/密码，留空即关闭认证（**等同开放代理，不推荐**）。
@@ -98,7 +98,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.5.8
+      easy-singbox  管理面板  v1.5.9
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -109,7 +109,7 @@ sb
              IPv6 2001:db8::1  |  日本/东京 / 某ISP
  Sing-Box  : 已运行  v1.14.0  (2 协议在线)
              [内核 1.14.x 已达标]
- 脚本版本  : v1.5.8  [已是最新]
+ 脚本版本  : v1.5.9  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -118,7 +118,7 @@ sb
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
  [7] 升级内核版本        (适配 sing-box 1.14.x，升到最新补丁)
- [8] 更新脚本            (当前 v1.5.8)
+ [8] 更新脚本            (当前 v1.5.9)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
  [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)
  [0] 退出

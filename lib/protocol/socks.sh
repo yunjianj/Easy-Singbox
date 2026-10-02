@@ -10,14 +10,19 @@
 #   - 启动时 protocol/socks/inbound.go 里 Network: []string{N.NetworkTCP}，
 #     **只 bind TCP**（日志只有 "tcp server started at ..."），1.13 起 legacy
 #     inbound 的 network 字段已移除，无法在配置里要求它同时监听 UDP。
-#   - 但 UDP ASSOCIATE **仍然可用**：客户端发来 UDP ASSOCIATE 时，sing 库的
-#     HandleConnectionEx 才调 Listener.ListenPacket，在**同一端口**懒绑定一个
-#     UDP 套接字（该方法不校验 Network 白名单），并回 success；该 UDP 会话随
-#     控制 TCP 连接关闭而销毁。
-#   => 结论：启动态只有 tcp 是确定保证，udp 要等客户端发起 UDP ASSOCIATE 才出现，
-#      所以**静态 ss 检测不到 udp 属正常，不能据此判失败**（历史上就是这么误报的）。
-#      端口校验（service_verify_ports）只查 tcp；防火墙仍需 tcp+udp 都放行，
-#      否则客户端一旦用 UDP ASSOCIATE 就会失败。
+#   - UDP ASSOCIATE 握手本身能成功，但**转发端口不是 listen_port**：
+#     sing 库 protocol/socks/handshake.go 处理 CommandUDPAssociate 时调
+#     Listener.ListenPacket(..., M.SocksaddrFrom(addr, 0))，端口写死 0 →
+#     内核从 net.ipv4.ip_local_port_range 里分配一个**随机高位端口**（每次会话都变），
+#     再把这个随机端口写进 SOCKS5 reply 的 BND.ADDR:BND.PORT 告诉客户端。
+#     Listener.ListenPacket 直接用传入的 address bind，不参考 listen_port，
+#     且配置里没有任何字段能钉死它。
+#   => 结论：
+#      1) 启动态只有 tcp 是确定保证 → 端口校验（service_verify_ports）只查 tcp，
+#         静态 ss 检测不到 udp 属正常，不能据此判失败（历史上就是这么误报的）。
+#      2) SOCKS5 的 UDP 转发要穿透云安全组，必须放行**整个临时端口范围**
+#         （如 32768-60999），只放行 listen_port 无效。所以本脚本不为 socks
+#         放行 udp（放的是空规则），需要 UDP 的流量请走 Hysteria2 / TUIC。
 #
 # users 为空数组或不给 users 字段 = 不认证（不推荐）。
 # 参数：port [user] [pass]；user/pass 任一为空即不启用认证。

@@ -84,18 +84,24 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 | a | anytls | tcp | password | 强制 TLS |
 | b | hysteria2 | udp | password | 强制 TLS |
 | c | tuic | udp | uuid+password | 强制 TLS |
-| d | socks | tcp（udp 按需） | user+password | 明文（sing-box socks 无 tls 字段）；启动只 bind tcp，UDP ASSOCIATE 时才懒绑定 udp，**静态检测不到 udp 属正常** |
+| d | socks | tcp | user+password | 明文（sing-box socks 无 tls 字段）；**仅 TCP**，UDP ASSOCIATE 用内核随机临时端口 |
 
 **生成集 = 用户选择(PROTOS)**。`.state` 的 `PROTOS` 保存用户原始字母选择；
 `config_gen` / `node_gen` / `diag` 全部只依据 `PROTOS` 生成对应 inbound 与 URI
 （不再受已装内核版本影响——安装/升级已保证内核恒为 `SB_VER_BASE.x`）。
 
-**端口监听校验只能用启动态确定存在的东西**（v1.5.8 起明确）：SOCKS5 启动时
-sing-box 只 bind tcp（`protocol/socks/inbound.go` 里 `Network: []string{NetworkTCP}`），
-udp 是客户端发起 UDP ASSOCIATE 时由 `Listener.ListenPacket` 在同一端口**懒绑定**的。
-所以 `service_verify_ports` 对 socks **只查 tcp**；用静态 `ss` 查 udp 必然查不到，
-拿它判失败就是误报（历史上真把安装误中止过）。防火墙仍需 tcp+udp 都放行，
-否则客户端一旦用 UDP ASSOCIATE 就失败。
+**SOCKS5 只算 TCP 协议**（v1.5.9 起明确，依据 sing-box 1.14 源码）：
+
+- 启动时 `protocol/socks/inbound.go` 里 `Network: []string{NetworkTCP}`，**只 bind tcp**；
+  1.13 起 legacy inbound 的 `network` 字段已移除，配置里无法要求它同时监听 UDP。
+- UDP ASSOCIATE 握手虽能成功，但转发端口**不是 `listen_port`**：sing 库
+  `protocol/socks/handshake.go` 调 `Listener.ListenPacket(..., M.SocksaddrFrom(addr, 0))`，
+  端口写死 0 → 内核从 `net.ipv4.ip_local_port_range` 分配**随机高位端口**（每次会话都变），
+  再写进 SOCKS5 reply 的 `BND.ADDR:BND.PORT`。`ListenPacket` 不参考 `listen_port`，
+  配置里也没有字段能钉死它。
+- 因此：`service_verify_ports` 对 socks **只查 tcp**（静态 `ss` 查 udp 必查不到，
+  拿它判失败就是误报，历史上真把安装误中止过）；防火墙**只放行 tcp**，
+  `udp <socks_port>` 是空规则还会误导用户。需要 UDP 的流量走 Hysteria2 / TUIC。
 
 ### 2.3 新增协议步骤
 
@@ -192,6 +198,7 @@ udp 是客户端发起 UDP ASSOCIATE 时由 `Listener.ListenPacket` 在同一端
 | 按内核版本裁剪协议（v1.3.3） | 已移除，协议集只由用户 `PROTOS` 决定 |
 | 面板宽度自适应（`ui_*` + `core_dcut`，v1.5.5~v1.5.6） | 已回退（2026-10-01）：截断掉 IP/地区与状态提示，面板回固定 62 列写法 |
 | `test_width.sh` 宽度回归 | 随上面一起删除，无自动化测试，按 `TESTING.md` 人工验证 |
-| 用静态 `ss` 检测 SOCKS5 的 udp 监听并据此判失败 | 已移除（v1.5.8）：udp 是 UDP ASSOCIATE 懒绑定的，静态检测必误报，曾把安装误中止 |
+| 用静态 `ss` 检测 SOCKS5 的 udp 监听并据此判失败 | 已移除（v1.5.8）：udp 走内核随机临时端口，静态检测必误报，曾把安装误中止 |
+| 为 SOCKS5 放行 `udp <listen_port>` | 已移除（v1.5.9）：该端口上永远没有 udp 监听，是空规则且误导用户 |
 | `templates/config.json.tpl` | 无引用，勿依赖 |
 | 订阅链接 / 剪贴板写入 / 节点分段 | 产品边界，永不做 |

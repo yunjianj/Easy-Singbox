@@ -71,7 +71,7 @@ node_gen() {
       echo ""
     fi
     if [[ -n "$socks_uri" ]]; then
-      echo "## SOCKS5（明文，无 TLS）"
+      echo "## SOCKS5（明文，无 TLS，仅 TCP）"
       echo "$socks_uri"
       echo ""
     fi
@@ -130,7 +130,7 @@ JSON
     echo ""
   fi
   if [[ -n "$socks_uri" ]]; then
-    echo -e "${C_CYN}## SOCKS5${C_RST} ${C_YEL}(明文，无 TLS)${C_RST}"
+    echo -e "${C_CYN}## SOCKS5${C_RST} ${C_YEL}(明文，无 TLS，仅 TCP)${C_RST}"
     echo "$socks_uri"
     echo ""
   fi

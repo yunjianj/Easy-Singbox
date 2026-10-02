@@ -223,12 +223,12 @@ core_proto_display() {
 }
 
 # 协议名 -> 传输层（防火墙放行用）
-# SOCKS5 为 tcp/udp：启动时 sing-box 只 bind tcp，但客户端发起 UDP ASSOCIATE 时会在
-# 同一端口懒绑定 udp，故防火墙两个协议都需放行（端口校验则只查 tcp，见 service.sh）。
+# SOCKS5 只算 tcp：它的 UDP ASSOCIATE 走内核随机分配的临时端口（非 listen_port），
+# 放行 udp <listen_port> 是空规则。需要 UDP 的流量请用 hysteria2 / tuic。
 core_proto_transport() {
   case "$1" in
     hysteria2|tuic) echo udp ;;
-    socks) echo "tcp/udp" ;;
+    socks) echo tcp ;;
     anytls) echo tcp ;;
     *) echo tcp ;;
   esac
