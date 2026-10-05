@@ -68,6 +68,26 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 - [ ] 手动把 `/usr/local/bin/sing-box` 换成旧内核（如 1.13.x）后进入面板，出现红色「内核版本过低…请执行选项 7 升级」提示
 - [ ] 选项 7 一键升级：自动下载 1.14 大版本最新补丁（不可手动输入版本），服务正常，`sing-box check` 通过
 - [ ] 升级失败时可从 `/usr/local/bin/sing-box.bak` 恢复
+- [ ] 升级后 `systemctl is-active sing-box` 为 `active`（脚本会轮询确认；起不来会自动回滚内核，不留半成品）
+
+## 8b. 旧 `.state` 升级回归（v1.5.10 修复项，必测）
+
+模拟 v1.4.0 之前脚本写出的 `.state`（缺 `PROTOS`/`PORT_SOCKS`/`USER_SOCKS`/`PASS_SOCKS`），
+验证选项 7 不再 `PROTOS: unbound variable` 中断。
+
+```bash
+cp /etc/sing-box/.state /root/state.bak
+cp /etc/sing-box/config.json /root/config.bak
+# 删掉新版本才有的键，模拟旧机器
+sed -i -e '/^PROTOS=/d' -e '/^PORT_SOCKS=/d' -e '/^USER_SOCKS=/d' -e '/^PASS_SOCKS=/d' /etc/sing-box/.state
+# 把内核换成 1.13.x，再走选项 7
+```
+
+- [ ] 选项 7 全程跑完，**无 `unbound variable`**，提示「检测到旧版状态文件（无 PROTOS 键），已按现有配置推断启用协议: ...」
+- [ ] `sing-box check -c /etc/sing-box/config.json` 通过；`python3 -m json.tool /etc/sing-box/config.json` 无报错
+- [ ] 推断的协议集与升级前一致（**不会凭空多出 SOCKS5**）；`grep '^PROTOS=' /etc/sing-box/.state` 已被回写
+- [ ] `nodes.txt` 每个 URI 的端口与 `config.json` 对应 inbound 的 `listen_port` 一致
+- [ ] 还原：`cp /root/state.bak /etc/sing-box/.state && cp /root/config.bak /etc/sing-box/config.json && sb`（选项 6 重载）
 
 ## 9. 卸载
 

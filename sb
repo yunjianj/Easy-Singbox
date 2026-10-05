@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.5.9"
+SB_SCRIPT_VERSION="1.5.10"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -465,11 +465,36 @@ sb_version_menu() {
   if sb_download "$latest" "$arch"; then
     # 升级后把存量配置平滑重建为基线语法（幂等；对旧脚本版本生成的 1.13 语法
     # 配置尤其必要，避免新内核以旧语法文件带病运行），并刷新节点。
-    if config_rebuild_from_state; then
+    local rrc=0
+    config_rebuild_from_state || rrc=$?
+    if [[ $rrc -eq 0 ]]; then
       ok "配置已按基线语法（${SB_VER_BASE}.x）重建，代理参数保持不变"
       node_gen || true
+    elif [[ $rrc -eq 2 ]]; then
+      warn "未能重建配置（无状态文件或内核不可用），已保留原 config.json"
+    else
+      error "配置重建失败：已回滚原 config.json"
     fi
-    service_reload
+    # 内核已换新但配置可能仍是旧语法（重建失败时），此时 reload 可能直接起不来。
+    # reload 返回成功也只代表 systemd 接受了请求，等一小会儿确认进程真的活着；
+    # 起不来就回滚内核，保证"要么全新配置跑新内核，要么原样不动"，不给半成品。
+    local i upgraded=0
+    if service_reload; then
+      for i in $(seq 1 10); do
+        service_is_active && { upgraded=1; break; }
+        sleep 1
+      done
+    fi
+    if [[ $upgraded -ne 1 ]]; then
+      error "新内核下服务未能正常运行，回滚内核到 v$cur"
+      if [[ -f "${SB_BIN}.bak" ]]; then
+        mv -f "${SB_BIN}.bak" "$SB_BIN"
+        service_reload || true
+        ok "已回滚到原内核 v$cur（备份 ${SB_BIN}.bak 已消耗）"
+      fi
+      error "升级中止。若配置已不匹配当前内核，请执行选项 2 重新生成配置后再升级"
+      return 1
+    fi
     ok "已升级至 v$latest（旧版本备份: ${SB_BIN}.bak，可手动恢复）"
   else
     [[ -f "${SB_BIN}.bak" ]] && mv -f "${SB_BIN}.bak" "$SB_BIN"

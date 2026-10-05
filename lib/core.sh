@@ -200,6 +200,23 @@ core_all_protos() {
   echo "${out# }"
 }
 
+# 全部协议的字母编号串（如 "abcd"），用于"默认全选"的场景
+# （.state 缺 PROTOS 时的兜底、菜单默认值等）。规范化输出，无需再过 sed。
+core_all_protos_letters() {
+  core_letters_from_protos "$(core_all_protos)"
+}
+
+# 协议名列表（空格分隔）-> 字母串（如 "anytls tuic" -> "ac"），按 abcd 固定顺序。
+core_letters_from_protos() {
+  local names=${1:-} p l out=""
+  for p in $(core_all_protos); do
+    [[ " $names " == *" $p "* ]] || continue
+    l=$(core_proto_letter "$p")
+    out="$out$l"
+  done
+  echo "$out"
+}
+
 # 协议名 -> 选择编号（安装/变更时让用户用字母自选启用哪些协议）
 core_proto_letter() {
   case "$1" in
@@ -253,6 +270,119 @@ core_protos_human() {
     out="$out$(core_proto_display "$p") "
   done
   echo "${out% }"
+}
+
+# 从现有 config.json 的 inbounds 反查已启用协议，输出规范化字母串（如 "ac"）。
+# 供旧 .state（无 PROTOS 键）恢复协议集用：老机器升级前真正在跑的就是这份配置，
+# 它比任何猜测都权威。配置不存在/无协议 inbound 时返回 1。
+core_protos_from_conf() {
+  [[ -f "$SB_CONF" ]] || return 1
+  local letters="" p
+  for p in anytls hysteria2 tuic socks; do
+    if grep -q "\"type\": *\"$p\"" "$SB_CONF" 2>/dev/null; then
+      letters="$letters$(core_proto_letter "$p")"
+    fi
+  done
+  [[ -n "$letters" ]] || return 1
+  echo "$letters"
+}
+
+# 从现有 config.json 反查某协议的 inbound 监听端口（协议名入参）。
+# 供 .state 缺该端口时回填——重建配置的权威依据是"升级前正在跑的配置"，
+# 而不是猜一个端口。找不到返回 1。
+core_proto_port_from_conf() {
+  [[ -f "$SB_CONF" ]] || return 1
+  awk -v want="$1" '
+    /"type"/ {
+      if (match($0, /"type"[ \t]*:[ \t]*"[^"]+"/)) {
+        t = substr($0, RSTART, RLENGTH)
+        sub(/^.*"type"[ \t]*:[ \t]*"/, "", t); sub(/"$/, "", t)
+      }
+      next
+    }
+    /"listen_port"/ {
+      if (t != want) next
+      if (match($0, /:[ \t]*[0-9]+/)) {
+        v = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", v)
+        if (v != "" && v >= 1 && v <= 65535) { print v; exit }
+      }
+    }
+  ' "$SB_CONF" 2>/dev/null
+}
+
+# 取某协议"当前生效端口"：.state 的 PORT_* 优先（用户最新意图），缺失时回退
+# 现有 config.json 的 inbound 端口（.state 被旧版本写出/手工删键时的救命通道）。
+# 两处都没有则返回 1。
+core_state_proto_port() {
+  local port
+  case "$1" in
+    anytls)    port=${PORT_ANYTLS:-} ;;
+    hysteria2) port=${PORT_HY2:-} ;;
+    tuic)      port=${PORT_TUIC:-} ;;
+    socks)     port=${PORT_SOCKS:-} ;;
+    *) return 1 ;;
+  esac
+  if [[ -z "$port" ]]; then
+    port=$(core_proto_port_from_conf "$1") || port=""
+    [[ -n "$port" ]] || return 1
+  fi
+  printf '%s' "$port"
+}
+
+# 解析"当前应生效的协议"字母串（规范化，如 "acd"），供 config_rebuild_from_state /
+# node_gen / diag / config_change 共用，保证各处口径完全一致。
+#
+# 为什么需要它：v1.4.0 之前的脚本写出的 .state 里**没有 PROTOS 键**（当时协议集由
+# 内核版本决定，见 §2）。这类机器在 set -euo pipefail 下裸引用 $PROTOS 会直接
+# "unbound variable" 中断整个 sb（选项 7 升级内核即栽在此处）。而简单地把 PROTOS
+# 当空 = "全部协议"同样是错的：老机器根本没配过 SOCKS5，PORT_SOCKS 为空，
+# config_gen 会输出 "listen_port": （空值）这种非法 JSON，sing-box check 必失败。
+#
+# 数据来源优先级：
+#   1) 入参/.state 的 PROTOS（v1.4.0 起写入，最准确——用户原始意图）
+#   2) 现有 config.json 的 inbounds（老 .state 的真实生效集，升级前就在跑的东西）
+#   3) 能取到端口的协议（最后兜底：config.json 也缺失时）
+# 解析时剔除取不到端口的协议，保证交给 config_gen 的集合一定能生成合法配置。
+# 全部落空时返回 1（调用方须报错中止）。
+#
+# 注意：本函数只往 stdout 输出**协议字母串**，绝不打印任何提示——它总被
+# `protos=$(core_resolve_state_protos ...)` 在命令替换里调用，而 warn/info/ok 的
+# 输出目标是 stdout，一旦混进来就会被当成协议名写进 .state/config.json。
+# 需要提示被剔除的协议时，调用方拿到结果后用 core_warn_dropped_protos 单独打印。
+core_resolve_state_protos() {
+  local letters=${1:-} out="" p
+  if [[ -z "$letters" ]]; then
+    letters=$(core_protos_from_conf 2>/dev/null) || letters=""
+  fi
+  if [[ -z "$letters" ]]; then
+    for p in $(core_all_protos); do
+      if core_state_proto_port "$p" >/dev/null 2>&1; then
+        letters="$letters$(core_proto_letter "$p")"
+      fi
+    done
+  fi
+  for p in $(core_protos_from_letters "$letters"); do
+    core_state_proto_port "$p" >/dev/null 2>&1 || continue
+    out="$out$(core_proto_letter "$p")"
+  done
+  [[ -n "$out" ]] || return 1
+  printf '%s' "$out"
+}
+
+# 协议集解析后若有用到端口的协议被剔除，必须显式告警——静默丢协议等于静默改动
+# 用户配置。由调用方在拿到 core_resolve_state_protos 结果后调用（不在命令替换里）。
+# 参数：请求的字母串、实际生效的字母串。
+core_warn_dropped_protos() {
+  local want=${1:-} got=${2:-} dropped=""
+  [[ -n "$want" ]] || return 0
+  local p
+  for p in $(core_protos_from_letters "$want"); do
+    local l; l=$(core_proto_letter "$p")
+    [[ "$got" == *"$l"* ]] || dropped="$dropped $(core_proto_display "$p")"
+  done
+  [[ -z "$dropped" ]] && return 0
+  warn "以下协议缺少可用端口（.state 与现有 config.json 均无），本次已跳过：${dropped# }"
+  warn "如需启用，请执行选项 2 为其指定端口"
 }
 
 # 返回 "installed|running|version|proto_count"

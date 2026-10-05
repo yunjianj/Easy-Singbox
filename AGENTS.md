@@ -90,6 +90,21 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 `config_gen` / `node_gen` / `diag` 全部只依据 `PROTOS` 生成对应 inbound 与 URI
 （不再受已装内核版本影响——安装/升级已保证内核恒为 `SB_VER_BASE.x`）。
 
+**读 `.state` 的铁律（v1.5.10 起）**：`.state` 可能由**旧版本脚本**写出，键并不齐全
+（v1.4.0 之前没有 `PROTOS`/`PORT_SOCKS`/`USER_SOCKS`/`PASS_SOCKS`）。因此：
+
+1. **一律 `${VAR:-}`，禁止裸引用**——`sb` 顶层 `set -euo pipefail`，裸引用缺失键会抛
+   `unbound variable` **直接终止整个脚本**（v1.5.9 选项 7 升级内核就是这么挂的：
+   二进制已换新、配置未重建、脚本静默退出）。
+2. **协议集/端口统一走 `core_resolve_state_protos` / `core_state_proto_port`**，
+   优先级：`.state` 的 `PROTOS`/`PORT_*` → 现有 `config.json` 的 inbound → 端口推断。
+   绝不把「`PROTOS` 为空」当成「全部协议」——老机器没配过 SOCKS5，
+   `PORT_SOCKS` 为空会生成 `"listen_port": ` 这种非法 JSON。
+3. `core_resolve_state_protos` **只输出字母串、不打印任何提示**（它总在 `$( )` 里被调用，
+   而 `warn`/`info`/`ok` 输出到 stdout，混进去会被写进 `.state`）；要提示被剔除的协议，
+   调用方拿到结果后另调 `core_warn_dropped_protos`（静默丢协议 = 静默改用户配置）。
+4. `config_gen` 对**启用协议**的端口做 1-65535 整数校验，早于写文件失败并给出可读原因。
+
 **SOCKS5 只算 TCP 协议**（v1.5.9 起明确，依据 sing-box 1.14 源码）：
 
 - 启动时 `protocol/socks/inbound.go` 里 `Network: []string{NetworkTCP}`，**只 bind tcp**；
@@ -122,6 +137,11 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 `sb_download` 下载（含官方 digest 校验）→ `config_rebuild_from_state()` 把存量配置
 按基线语法平滑重建（对 v1.3.x 等旧脚本生成的 1.13 语法配置必要）→ reload + 刷新节点 →
 失败回滚 `.bak`。
+
+**升级必须原子（v1.5.10 起）**：`config_rebuild_from_state` 的返回值必须分档处理
+（`0`=已重建 / `2`=无 state 跳过 / `1`=失败已回滚 config.json），reload 之后还要
+**轮询确认服务真的 active**（reload 返回成功 ≠ 进程没崩）。任一环节不达标就
+**把内核 `.bak` 也回滚并 reload**，宁可停在原版本，也不给「新内核 + 旧配置」的半成品。
 
 ## 3. 终端输出约定
 
@@ -172,6 +192,15 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 覆盖：全协议/子集生成、任意已装内核下均输出基线最新语法（不做版本裁剪）、升级判断
 （低于基线需升 / 已最新无需升）、`.state` 保留参数。
 
+**必须覆盖「旧 `.state`」场景**（v1.5.10 起列为必测，v1.5.9 的线上事故即此）：
+用一个**没有 `PROTOS`/`PORT_SOCKS`/`USER_SOCKS`/`PASS_SOCKS` 键**的 `.state`
+（模拟 v1.4.0 之前的机器）驱动 `config_rebuild_from_state`，断言：
+
+- 不抛 `unbound variable`、返回 0，`config.json` 仍是合法 JSON（`python3 -m json.tool`）；
+- 推断出的协议集 = 升级前 `config.json` 里实际存在的 inbound（不多不少，尤其**不会
+  凭空多出 SOCKS5**）；`.state` 被回写为带 `PROTOS` 的新格式；
+- `nodes.txt` 每个 URI 的端口 == `config.json` 对应 inbound 的 `listen_port`。
+
 **适配新的大版本内核时**（如未来升级到 1.15）：改 `SB_VER_BASE`，用官方 1.15 二进制对
 每个协议 inbound 跑 `sing-box check` 回归，更新本文件与 README。
 
@@ -200,5 +229,6 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 | `test_width.sh` 宽度回归 | 随上面一起删除，无自动化测试，按 `TESTING.md` 人工验证 |
 | 用静态 `ss` 检测 SOCKS5 的 udp 监听并据此判失败 | 已移除（v1.5.8）：udp 走内核随机临时端口，静态检测必误报，曾把安装误中止 |
 | 为 SOCKS5 放行 `udp <listen_port>` | 已移除（v1.5.9）：该端口上永远没有 udp 监听，是空规则且误导用户 |
+| 裸引用 `.state` 里的键（`"$PROTOS"` 等） | 已移除（v1.5.10）：旧 `.state` 缺键 + `set -u` = 整个脚本静默退出，选项 7 升级内核曾因此半途而废 |
 | `templates/config.json.tpl` | 无引用，勿依赖 |
 | 订阅链接 / 剪贴板写入 / 节点分段 | 产品边界，永不做 |

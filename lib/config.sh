@@ -32,7 +32,7 @@ config_gen() {
 
   # 端口不可重复：仅校验实际生成协议的非空端口（未启用的协议端口为空，
   # 若参与比较会出现 "" == "" 的误判）。
-  local _p _port _seen=" "
+  local _p _port _portnum _seen=" "
   for _p in $active; do
     case "$_p" in
       anytls)    _port=$port_any ;;
@@ -40,12 +40,24 @@ config_gen() {
       tuic)      _port=$port_tuic ;;
       socks)     _port=$port_socks ;;
     esac
-    [[ -z "$_port" ]] && continue
-    if [[ "$_seen" == *" $_port "* ]]; then
-      error "端口重复：$(core_proto_display "$_p") 使用了已被占用的 $_port"
+    # 启用协议的端口必须合法（1-65535 整数）：端口为空会输出 "listen_port": 这种
+    # 非法 JSON，非数字/越界则 sing-box check 直接失败。此处提前拦下并给出可读原因，
+    # 杜绝"生成 → check 失败 → 回滚"这种对用户毫无信息量的失败路径。
+    # （10# 前缀按十进制解析，避免 "080" 这类带前导零的值被当成八进制而报错）
+    if [[ -z "$_port" || ! "$_port" =~ ^[0-9]+$ ]]; then
+      error "$(core_proto_display "$_p") 已启用但端口无效（当前: '${_port:-空}'），请重新执行选项 2 指定合法端口"
       return 1
     fi
-    _seen="$_seen$_port "
+    _portnum=$((10#$_port))
+    if (( _portnum < 1 || _portnum > 65535 )); then
+      error "$(core_proto_display "$_p") 端口 $_port 超出合法范围（1-65535），请重新执行选项 2 指定合法端口"
+      return 1
+    fi
+    if [[ "$_seen" == *" $_portnum "* ]]; then
+      error "端口重复：$(core_proto_display "$_p") 使用了已被占用的 $_portnum"
+      return 1
+    fi
+    _seen="$_seen$_portnum "
   done
   # Hysteria2 跳跃段即 Hy2 监听端口，故仅检查与其余生效协议的监听端口是否重叠
   if [[ -n "$hop_hy2" ]]; then
@@ -117,7 +129,7 @@ config_gen() {
   # PROTOS 保存"用户选择的字母串"（而非生成集）：升级内核大版本或重装后仍保留
   # 用户意图。未显式指定 protos 时回写为全部协议的字母串（兼容旧 .state 与直接调用）。
   local protos_save=$protos
-  [[ -n "$protos_save" ]] || protos_save=$(core_all_protos | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' ')
+  [[ -n "$protos_save" ]] || protos_save=$(core_all_protos_letters)
   cat > "$SB_STATE" <<EOF
 DOMAIN=$domain
 PROTOS=$protos_save
@@ -205,7 +217,7 @@ config_pick_protos() {
     warn "  需放行整个临时端口范围才能穿透云安全组；需要 UDP 的流量请选 Hysteria2 / TUIC。" >&2
   fi
   # 回显字母串（规范化：仅保留有效字母并按 abcd 排序）
-  core_protos_from_letters "$in" | sed 's/anytls/a/;s/hysteria2/b/;s/tuic/c/;s/socks/d/' | tr -d ' '
+  core_letters_from_protos "$(core_protos_from_letters "$in")"
 }
 
 # 变更代理配置（主页面选项 2）
@@ -217,7 +229,11 @@ config_change() {
   [[ -f "$SB_STATE" ]] && set -a && . "$SB_STATE" && set +a
 
   # 先让用户选择启用哪些协议（字母编号，如 bc = Hysteria2 + TUIC）
-  local protos; protos=$(config_pick_protos "${PROTOS:-}")
+  # 默认预选当前生效集（core_resolve_state_protos 兼容无 PROTOS 键的旧 .state，
+  # 避免老机器进来后默认空选、等于要用户把协议重选一遍）。
+  local def_protos
+  def_protos=$(core_resolve_state_protos "${PROTOS:-}") || def_protos=$(core_all_protos_letters)
+  local protos; protos=$(config_pick_protos "$def_protos")
   [[ -n "$protos" ]] || return 1
   local chosen; chosen=$(core_protos_from_letters "$protos")
 
@@ -297,13 +313,38 @@ config_change() {
 config_rebuild_from_state() {
   [[ -f "$SB_STATE" ]] || { warn "未找到状态文件 $SB_STATE，跳过配置重建"; return 2; }
   [[ -x "$SB_BIN" ]]  || { warn "未安装 sing-box，跳过配置重建"; return 2; }
+  # 注意：.state 可能由旧版本脚本写出，**不能假设所有键都存在**。sb 顶层是
+  # set -euo pipefail，裸引用缺失的键会抛 unbound variable 直接终止整个脚本
+  # （v1.5.9 选项 7 升级内核即栽在这里：旧 .state 无 PROTOS/PORT_SOCKS 等键）。
+  # 因此下列所有读取一律用 ${VAR:-}。
   set -a; . "$SB_STATE"; set +a
+
+  # 协议集：优先 .state 的 PROTOS；缺失（旧 .state）则从现有 config.json 反查，
+  # 再兜底按端口推断，并剔除取不到端口的协议（详见 core_resolve_state_protos 注释）。
+  local protos
+  if ! protos=$(core_resolve_state_protos "${PROTOS:-}"); then
+    warn "状态文件与现有配置中均无法确定已启用协议（.state: $SB_STATE），跳过配置重建"
+    return 2
+  fi
+  core_warn_dropped_protos "${PROTOS:-}" "$protos"
+  if [[ -z "${PROTOS:-}" ]]; then
+    warn "检测到旧版状态文件（无 PROTOS 键），已按现有配置推断启用协议: $(core_protos_human "$protos")"
+  fi
+
+  # 端口同样统一走 core_state_proto_port：.state 缺端口时回填现有 config.json 的
+  # 监听端口，保证"重建"忠实于升级前正在跑的配置，而不是丢协议或猜端口。
+  local p_any p_hy2 p_tuic p_socks
+  p_any=$(core_state_proto_port anytls || true)
+  p_hy2=$(core_state_proto_port hysteria2 || true)
+  p_tuic=$(core_state_proto_port tuic || true)
+  p_socks=$(core_state_proto_port socks || true)
+
   local bak="${SB_CONF}.pre-ver.$$"
   [[ -f "$SB_CONF" ]] && cp -f "$SB_CONF" "$bak" 2>/dev/null || true
-  if config_gen "$DOMAIN" "$PORT_ANYTLS" "$PORT_HY2" "$PORT_TUIC" \
-                "$PASS_ANYTLS" "$PASS_HY2" "$PASS_TUIC" "$UUID_TUIC" \
-                "${OBS_HY2:-}" "${HOP_HY2:-}" "$PROTOS" "$PORT_SOCKS" \
-                "$USER_SOCKS" "$PASS_SOCKS"; then
+  if config_gen "${DOMAIN:-}" "$p_any" "$p_hy2" "$p_tuic" \
+                "${PASS_ANYTLS:-}" "${PASS_HY2:-}" "${PASS_TUIC:-}" "${UUID_TUIC:-}" \
+                "${OBS_HY2:-}" "${HOP_HY2:-}" "$protos" "$p_socks" \
+                "${USER_SOCKS:-}" "${PASS_SOCKS:-}"; then
     rm -f "$bak" 2>/dev/null || true
     return 0
   fi

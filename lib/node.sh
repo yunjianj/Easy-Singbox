@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # lib/node.sh — 节点 URI 生成
 # 严禁生成订阅链接。安装完成或选“查看节点”后打印已启用协议的 URI，写入 nodes.txt(600)。
-# 生效集 = 用户选择(PROTOS)，与 config_gen 严格一致（v1.5.0 起无内核版本裁剪）。
+# 生效集 = 实际启用协议（core_resolve_state_protos 统一解析），与 config_gen 严格一致。
 
 node_gen() {
   if [[ ! -f "$SB_STATE" ]]; then
@@ -10,46 +10,55 @@ node_gen() {
   fi
   set -a; . "$SB_STATE"; set +a
 
-  local name="$DOMAIN"
-  # 仅输出用户启用(PROTOS)的协议节点；未启用的协议不生成 URI，
+  # 一律用 ${VAR:-}：.state 可能由旧版本脚本写出（缺 PROTOS/PORT_SOCKS 等键），
+  # sb 顶层 set -u 下裸引用会抛 unbound variable 直接终止脚本。
+  local name="${DOMAIN:-}"
+  # 仅输出实际启用协议的节点；未启用的协议不生成 URI，
   # 其配置仍保留在 .state，重新选上后由 config_gen 恢复生成。
-  local active
-  if [[ -n "${PROTOS:-}" ]]; then
-    active=$(core_protos_from_letters "$PROTOS")
-  else
-    active=$(core_all_protos)   # 旧 .state 无 PROTOS：默认全部协议
-  fi
+  # 协议集与端口都用 core_resolve_state_protos / core_state_proto_port 统一解析
+  # （.state PROTOS/PORT_* → 现有 config.json），与 config_gen / diag 口径严格一致，
+  # 保证节点里的端口与 config.json 里真正在监听的端口永远相同。
+  local active="" p_any="" p_hy2="" p_tuic="" p_socks=""
+  local _letters
+  _letters=$(core_resolve_state_protos "${PROTOS:-}") \
+    || _letters=$(core_all_protos_letters)
+  core_warn_dropped_protos "${PROTOS:-}" "$_letters"
+  active=$(core_protos_from_letters "$_letters")   # 下方按协议名比对
+  p_any=$(core_state_proto_port anytls || true)
+  p_hy2=$(core_state_proto_port hysteria2 || true)
+  p_tuic=$(core_state_proto_port tuic || true)
+  p_socks=$(core_state_proto_port socks || true)
 
   local anytls_uri="" hy2_uri="" tuic_uri="" socks_uri=""
   if [[ " $active " == *" anytls "* ]]; then
-    anytls_uri="anytls://${PASS_ANYTLS}@${DOMAIN}:${PORT_ANYTLS}?sni=${DOMAIN}&insecure=0#${name}"
+    anytls_uri="anytls://${PASS_ANYTLS:-}@${DOMAIN:-}:$p_any?sni=${DOMAIN:-}&insecure=0#${name}"
   fi
   if [[ " $active " == *" socks "* ]]; then
     # SOCKS5 无强制 TLS；带认证时写入 user:pass@，任一留空则不认证
     if [[ -n "${USER_SOCKS:-}" && -n "${PASS_SOCKS:-}" ]]; then
-      socks_uri="socks5://${USER_SOCKS}:${PASS_SOCKS}@${DOMAIN}:${PORT_SOCKS}#${name}"
+      socks_uri="socks5://${USER_SOCKS:-}:${PASS_SOCKS:-}@${DOMAIN:-}:$p_socks#${name}"
     else
-      socks_uri="socks5://${DOMAIN}:${PORT_SOCKS}#${name}"
+      socks_uri="socks5://${DOMAIN:-}:$p_socks#${name}"
     fi
   fi
   if [[ " $active " == *" hysteria2 "* ]]; then
-    hy2_uri="hysteria2://${PASS_HY2}@${DOMAIN}:${PORT_HY2}?alpn=h3&sni=${DOMAIN}&insecure=0"
-    if [[ -n "$OBS_HY2" ]]; then
-      hy2_uri="${hy2_uri}&obfs=salamander:${OBS_HY2}"
+    hy2_uri="hysteria2://${PASS_HY2:-}@${DOMAIN:-}:$p_hy2?alpn=h3&sni=${DOMAIN:-}&insecure=0"
+    if [[ -n "${OBS_HY2:-}" ]]; then
+      hy2_uri="${hy2_uri}&obfs=salamander:${OBS_HY2:-}"
     fi
     # Hysteria2 端口跳跃（mport）：sing-box 核心 inbound 不支持服务端端口跳跃（无 listen_port 范围），
     # 脚本用 nftables/iptables REDIRECT 把整个跳跃段重定向到基础监听端口，回包由 conntrack 自动还原
     # 源端口，客户端 mport 跳变完全可用（v1.0.7 曾据此移除 mport，实为误判——真正导致节点不通的
     # 是 DNS detour 崩溃，已于 v1.1.0 修复）。启用跳跃后需在云安全组放行整个 UDP 范围。
-    # 用 ${HOP_HY2:-}：跳跃未启用时该键会被 config_gen 从 .state 删掉，
+    # 用 ${HOP_HY2:-}：跳跃未启用/未生效时 config_gen 会把该键从 .state 删除，
     # set -u 下裸引用会直接报错中断节点生成。
     if [[ -n "${HOP_HY2:-}" ]]; then
-      hy2_uri="${hy2_uri}&mport=${HOP_HY2}"
+      hy2_uri="${hy2_uri}&mport=${HOP_HY2:-}"
     fi
     hy2_uri="${hy2_uri}#${name}"
   fi
   if [[ " $active " == *" tuic "* ]]; then
-    tuic_uri="tuic://${UUID_TUIC}:${PASS_TUIC}@${DOMAIN}:${PORT_TUIC}?congestion_control=bbr&udp_relay_mode=native&sni=${DOMAIN}&alpn=h3&insecure=0#${name}"
+    tuic_uri="tuic://${UUID_TUIC:-}:${PASS_TUIC:-}@${DOMAIN:-}:$p_tuic?congestion_control=bbr&udp_relay_mode=native&sni=${DOMAIN:-}&alpn=h3&insecure=0#${name}"
   fi
 
   {
@@ -81,10 +90,10 @@ node_gen() {
 {
   "type": "anytls",
   "tag": "anytls",
-  "server": "$DOMAIN",
-  "server_port": $PORT_ANYTLS,
-  "password": "$PASS_ANYTLS",
-  "tls": { "enabled": true, "server_name": "$DOMAIN", "insecure": false }
+  "server": "${DOMAIN:-}",
+  "server_port": $p_any,
+  "password": "${PASS_ANYTLS:-}",
+  "tls": { "enabled": true, "server_name": "${DOMAIN:-}", "insecure": false }
 }
 JSON
       echo ""
@@ -95,8 +104,8 @@ JSON
 {
   "type": "socks",
   "tag": "socks",
-  "server": "$DOMAIN",
-  "server_port": $PORT_SOCKS,
+  "server": "${DOMAIN:-}",
+  "server_port": $p_socks,
   "version": "5",
   "username": "${USER_SOCKS:-}",
   "password": "${PASS_SOCKS:-}",

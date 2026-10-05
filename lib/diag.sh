@@ -105,14 +105,15 @@ diag_collect() {
       set +u
       . "$SB_STATE" 2>/dev/null || true
       echo "--- 按协议逐个核对 ---"
-      # 只核对用户启用(PROTOS)的协议；未启用的协议不会生成 inbound（端口本就不该监听），
+      # 只核对实际启用协议的端口；未启用的协议不会生成 inbound（端口本就不该监听），
       # 若按"未监听"标注会误导排查方向——此处显式区分"未启用"与"未监听"。
-      local _sup
-      if [[ -n "${PROTOS:-}" ]]; then
-        _sup=$(core_protos_from_letters "$PROTOS")
-      else
-        _sup=$(core_all_protos)   # 旧 .state 无 PROTOS：默认全部协议
-      fi
+      # 协议集与 config_gen / node_gen 共用 core_resolve_state_protos（.state PROTOS →
+      # 现有 config.json → 端口推断，并剔除端口为空的协议），口径严格一致。
+      local _sup="" _letters=""
+      _letters=$(core_resolve_state_protos "${PROTOS:-}") \
+        || _letters=$(core_all_protos_letters)
+      core_warn_dropped_protos "${PROTOS:-}" "$_letters"
+      _sup=$(core_protos_from_letters "$_letters")   # 下方按协议名比对
       _sup=" $_sup "
       # ss 缺失时不再直接放弃核对：core_listening_ports 已内置 /proc/net 回退，
       # 仅在回退也拿不到任何端口时才提示安装（避免把"无法探测"误报为"未监听"）
