@@ -154,12 +154,7 @@ service_start() {
   # 用 || true 避免 set -e 在 start 失败时直接中止，以便下方健康检查能打印真实日志。
   systemctl start sing-box 2>/dev/null || true
   # 重启服务后重新应用 Hysteria2 端口跳跃重定向（如已配置）
-  if [[ -f "$SB_STATE" ]]; then
-    set -a; . "$SB_STATE"; set +a
-    # 用 ${HOP_HY2:-}：跳跃未启用/生效时 config_gen 会把该键从 .state 删除，
-    # set -u（sb 顶层 set -euo pipefail）下裸引用会报 unbound variable 直接中止。
-    [[ -n "${HOP_HY2:-}" && -n "${PORT_HY2_LISTEN:-}" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
-  fi
+  hop_reapply || true
   # 健康检查：等待服务真正 active（最多 15s），否则打印日志并失败，避免“假成功”
   local i
   for i in $(seq 1 15); do
@@ -178,12 +173,7 @@ service_start_openrc() {
   # 不吞掉 OpenRC 的 [ ok ]/[ !! ] 标记，方便观察启动结果
   rc-service sing-box start || true
   # 重新应用端口跳跃（与 systemd 分支一致）
-  if [[ -f "$SB_STATE" ]]; then
-    set -a; . "$SB_STATE"; set +a
-    # 用 ${HOP_HY2:-}：跳跃未启用/生效时 config_gen 会把该键从 .state 删除，
-    # set -u（sb 顶层 set -euo pipefail）下裸引用会报 unbound variable 直接中止。
-    [[ -n "${HOP_HY2:-}" && -n "${PORT_HY2_LISTEN:-}" ]] && hop_apply "$PORT_HY2_LISTEN" "$HOP_HY2" || true
-  fi
+  hop_reapply || true
   # 健康检查：等待服务起来（最多 15s），否则打印日志并失败
   local i
   for i in $(seq 1 15); do
@@ -295,6 +285,10 @@ service_restart() {
     systemctl daemon-reload
     systemctl restart sing-box
   fi
+  # 重建端口跳跃 REDIRECT 规则：规则是非持久的内核状态，重启服务/系统后即失效，
+  # 而 .state 里的 HOP_HY2 仍在（节点 URI 会继续带 mport）。不在此重建的话，
+  # 规则消失后客户端向跳跃段发包无人接收，Hy2 必然超时（选项 6 走这里）。
+  hop_reapply || true
 }
 
 service_reload() {
@@ -304,6 +298,8 @@ service_reload() {
   else
     systemctl reload sing-box 2>/dev/null || systemctl restart sing-box
   fi
+  # 同 service_restart：证书重签（选项 3）、内核升级（选项 7）都会走到这里
+  hop_reapply || true
 }
 
 service_disable() {

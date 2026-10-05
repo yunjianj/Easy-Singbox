@@ -13,7 +13,7 @@
 
 ```bash
 bash install.sh
-# 选 1 安装 → 输入域名 → 选验证方式 → 选端口开放策略
+# 选 1 安装 → 输入域名 → 选验证方式 → （v1.6.0 起不再询问端口开放策略）
 ```
 
 检查项：
@@ -95,7 +95,32 @@ sed -i -e '/^PROTOS=/d' -e '/^PORT_SOCKS=/d' -e '/^USER_SOCKS=/d' -e '/^PASS_SOC
 - [ ] 可选删除证书目录与 acme.sh 账户
 - [ ] 再次执行 `sb` 提示「未安装」
 
-## 10. 防火墙后端
+## 10. 防火墙（v1.6.0 起脚本不自动配置）
 
-- [ ] 在 ufw / firewalld / iptables 三种环境分别验证「端口开放三选一」按预期放行
-- [ ] HTTP-01 模式下即便选「仅节点端口/不开放」，签发阶段临时放行的 80 在完成后被回收
+- [ ] 安装/选项 2 变更配置后，终端打印「需自行放行」的端口清单，且内容与实际启用协议一致（未启用的协议不出现）
+- [ ] 清单包含 `TCP 22 SSH` 与跳跃段整段提示（启用跳跃时）
+- [ ] 安装全程 `iptables -S INPUT` / `ufw status` **不含**本脚本新增的节点端口规则（除 HTTP-01 临时 80）
+- [ ] HTTP-01 签发阶段临时放行的 80 在签发结束（含失败路径）后被回收：`iptables -S INPUT | grep -- '--dport 80'` 无输出
+- [ ] 选项 11「一键关闭防火墙」：ufw 环境显示 `ufw status: inactive`；iptables 环境 INPUT 策略为 ACCEPT 且无 `-A INPUT` 规则
+- [ ] 选项 11 输入 `n` 取消时，防火墙规则无任何变化
+- [ ] 选项 11 确认前有明确警告（会 `iptables -F INPUT` / 停用 firewalld，暴露含 22 SSH 的所有端口）
+
+## 11. 端口跳跃规则丢失回归（v1.6.0 修复项，必测）
+
+REDIRECT 规则是非持久的内核状态，重启或被 1Panel/Docker/firewalld 改写 iptables 后即失效，
+而 `.state` 的 `HOP_HY2` 与节点 URI 的 `mport` 仍在 → Hy2 必然超时。
+
+```bash
+# 模拟规则丢失（保留 .state，只删内核规则）
+iptables -t nat -S PREROUTING | grep easy-singbox | awk '{print $1,$2,$3}' \
+  | xargs -r -n3 iptables -t nat -D
+iptables -t nat -S PREROUTING | grep -c easy-singbox-hop   # 应为 0
+```
+
+- [ ] 规则丢失后执行选项 9：§6 Hy2 行下方标注「[异常] 端口跳跃 … REDIRECT 规则不存在」，§9 显示「规则状态: [异常]」
+- [ ] §13 自动结论**指向服务端跳跃规则缺失**，明确说明「不是客户端问题」，并给出「执行选项 4 或 6 重建」的修复步骤
+- [ ] 执行选项 6（重启/查看节点）后 `iptables -t nat -S PREROUTING | grep -c easy-singbox-hop` 恢复为 1，客户端 mport 恢复可用
+- [ ] 执行选项 4（启动）同样能重建（服务已在运行时也生效）
+- [ ] 执行选项 3（变更证书）与选项 7（升级内核）后规则仍在（这两条路径经 `service_reload`）
+- [ ] `.state` 的 `HOP_HY2` 在上述过程中**不被删除**（只有 `config_gen` 有权因规则建立失败而删键）
+- [ ] 未配置跳跃的机器：§9 显示「未配置端口跳跃」，不出现任何 `[异常]` 误报

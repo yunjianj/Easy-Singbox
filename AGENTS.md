@@ -36,7 +36,7 @@ lib/
   core.sh           # 工具/系统探测/日志/颜色 + 版本比较 + 协议编号/元数据
   init.sh           # init 系统探测（systemd/OpenRC）
   service.sh        # 服务管理 + 降权用户 + 端口监听校验
-  firewall.sh       # 防火墙后端（ufw/firewalld/iptables/nftables）
+  firewall.sh       # 防火墙：只读探测 + 80 临时放行 + 显式关闭（不自动放行端口）
   cert.sh           # acme.sh 证书
   config.sh         # config_gen 生成 config.json + .state + config_rebuild_from_state
   node.sh           # node_gen 节点 URI
@@ -126,7 +126,7 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 4. **接入 `node_gen`**：按 `active` 输出该协议 URI；无标准 URI 时输出 sing-box outbound JSON 兜底（如 socks/anytls）。
 5. **接入联动点**（避免误报/误放行）：
    - `lib/service.sh` → `service_verify_ports()`：只校验启用协议的端口（空端口参数自动跳过）。
-   - `lib/firewall.sh` → `fw_apply_choice()`：防火墙仅放行启用协议端口。
+   - `lib/firewall.sh` → `fw_print_port_checklist()`：把该协议端口加进「需自行放行」清单（脚本不再自动放行）。
    - `lib/diag.sh` 第 6 节：未启用协议标注「未启用」而非「未监听」（已有模板）。
 6. **用真实内核验证**：开发机下载 `SB_VER_BASE.x` 的官方二进制跑 `sing-box check`，确认新协议 inbound 语法合法（见 §5）。
 
@@ -182,6 +182,7 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 - **凭证/端口等全部持久化参数只放 `.state`**（`/etc/sing-box/.state`，被 source 的 shell 文件，权限 600），`config.json` 永远由 `config_gen` 生成、**不手工编辑**。
 - **强制 TLS（SOCKS5 除外）、不生成订阅链接**是产品边界，任何改动不得突破。
 - **只适配内核基线大版本**：协议配置一律按 `SB_VER_BASE` 最新语法，禁止为旧大版本写分支或加"切换版本"入口。
+- **不自动改防火墙（v1.6.0 起红线）**：`lib/firewall.sh` 只允许「只读探测 `fw_detect`」「HTTP-01 签发期临时放行 80」「用户显式点 `[11]` 时 `fw_disable`」三种行为。**禁止**新增任何自动 `iptables -I` / `ufw allow` 放行节点端口的代码——同机跑 1Panel / Docker / firewalld 时，自动放行既会与用户自己的规则打架（互相 flush），也会制造「已经放行了」的错觉（云安全组仍需手配）。端口一律走 `fw_print_port_checklist()` 打印清单、由用户自管。
 - 发布新版本：同步 `sb` 内 `SB_SCRIPT_VERSION`、根 `VERSION`、`README.md` 面板示例三处；若更新了适配的内核大版本，同步修改 `SB_VER_BASE` 并在 README「依赖」节注明。
 
 ## 5. 测试
@@ -191,6 +192,12 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 `node_gen`，比对 `config.json` 中 inbound 与 `nodes.txt` 的 URI。
 覆盖：全协议/子集生成、任意已装内核下均输出基线最新语法（不做版本裁剪）、升级判断
 （低于基线需升 / 已最新无需升）、`.state` 保留参数。
+
+**必须覆盖「端口跳跃规则丢失」场景**（v1.6.0 起列为必测）：`HOP_HY2` 在 `.state` 里
+但内核无 REDIRECT 规则（重启 / 1Panel·Docker 改写 iptables 后的常态），断言
+`hop_verify` 返回非 0、`hop_reapply` 能把规则重建回来、诊断 §9 与 §13 都明确点出
+「规则缺失」而**不是**误判为「客户端配置问题」。注意：脚本**没有**开机/定时自愈
+（见 §7），`service_start` / `service_restart` / `service_reload` 是仅有的重建入口。
 
 **必须覆盖「旧 `.state`」场景**（v1.5.10 起列为必测，v1.5.9 的线上事故即此）：
 用一个**没有 `PROTOS`/`PORT_SOCKS`/`USER_SOCKS`/`PASS_SOCKS` 键**的 `.state`
@@ -230,5 +237,7 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 | 用静态 `ss` 检测 SOCKS5 的 udp 监听并据此判失败 | 已移除（v1.5.8）：udp 走内核随机临时端口，静态检测必误报，曾把安装误中止 |
 | 为 SOCKS5 放行 `udp <listen_port>` | 已移除（v1.5.9）：该端口上永远没有 udp 监听，是空规则且误导用户 |
 | 裸引用 `.state` 里的键（`"$PROTOS"` 等） | 已移除（v1.5.10）：旧 `.state` 缺键 + `set -u` = 整个脚本静默退出，选项 7 升级内核曾因此半途而废 |
+| 安装时「端口开放三选一」+ `fw_apply_choice` / `fw_ensure_ssh` / `fw_open_port`(permanent) / `fw_open_range` | 已移除（v1.6.0）：与 1Panel·Docker·firewalld 同机管理互相 flush，且制造「已放行」错觉。改为只打印 `fw_print_port_checklist` 清单 + 主菜单 `[11]` 显式关闭 |
+| 端口跳跃的 `ExecStartPost` / systemd timer 开机自愈 | **有意不做**（v1.6.0，用户决定）：为保持一键脚本低侵入，不改 unit 文件、不加常驻定时器。代价是开机/`Restart=always` 崩溃重启后规则仍会丢，靠选项 4/6 重建 + 诊断 §9/§13 可见性兜底 |
 | `templates/config.json.tpl` | 无引用，勿依赖 |
 | 订阅链接 / 剪贴板写入 / 节点分段 | 产品边界，永不做 |

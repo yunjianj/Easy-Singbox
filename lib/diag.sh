@@ -140,6 +140,20 @@ diag_collect() {
         else
           echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : [异常] 未监听"
         fi
+        # 端口跳跃：基础端口在监听 ≠ 跳跃段可用。REDIRECT 规则是非持久内核状态，
+        # 重启/被 1Panel·Docker 改写 iptables 后即消失，而 .state 的 HOP_HY2 仍在、
+        # 节点 URI 仍带 mport —— 此时客户端向跳跃段发包无人接收，Hy2 必然超时。
+        # 必须在监听表里就把这个状态点出来，否则会被误判成客户端问题。
+        if [[ -n "${HOP_HY2:-}" ]]; then
+          if hop_verify; then
+            echo "           └ 端口跳跃 UDP ${HOP_HY2} -> ${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : 规则在（客户端 mport 可用）"
+          else
+            echo "           └ [异常] 端口跳跃 UDP ${HOP_HY2} -> ${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : REDIRECT 规则不存在！"
+            echo "             └ 客户端按 URI 里的 mport=${HOP_HY2} 向该段发包，无人接收 → Hy2 必然超时。"
+            echo "             └ 规则是非持久的内核状态（重启 / 1Panel·Docker 改写 iptables 后即失效）。"
+            echo "             └ 修复：执行 sb 选项 4（启动）或 选项 6（重启）即可重建；根治需自行放行云安全组 UDP ${HOP_HY2}。"
+          fi
+        fi
       else
         echo "Hysteria2 udp/${PORT_HY2_LISTEN:-${PORT_HY2:-?}} : 未启用（未选择或当前内核不支持，未生成 inbound）"
       fi
@@ -199,7 +213,7 @@ diag_collect() {
     ) || true
   fi
 
-  _d_sec "8. 防火墙规则"
+  _d_sec "8. 防火墙规则（本脚本自 v1.6.0 起不再自动修改防火墙，以下仅为现状快照）"
   echo "--- 后端探测 ---"
   fw_detect 2>/dev/null || true
   echo "--- ufw ---"
@@ -215,8 +229,27 @@ diag_collect() {
   nft list ruleset 2>/dev/null | head -40 || echo "未安装 nft 或无规则"
 
   _d_sec "9. 端口跳跃 REDIRECT 规则"
-  iptables -t nat -S PREROUTING 2>/dev/null | grep -i 'easy-singbox\|REDIRECT' || echo "iptables nat 无相关规则"
-  nft list table ip easy_singbox 2>/dev/null || echo "nft 无 easy_singbox 表"
+  # 先说清"是否配置了跳跃"，再说规则在不在——否则"无相关规则"会被读成"没配跳跃"，
+  # 而实际是配了、规则却丢了（这正是 Hy2 超时的真实原因）。
+  local _hop_cfg="" _hop_state
+  if [[ -f "$SB_STATE" ]]; then
+    _hop_cfg=$(grep -m1 '^HOP_HY2=' "$SB_STATE" 2>/dev/null | cut -d= -f2- || true)
+  fi
+  if [[ -z "$_hop_cfg" ]]; then
+    echo "未配置端口跳跃（.state 无 HOP_HY2）——节点 URI 不带 mport，仅用基础端口"
+  else
+    echo "已配置端口跳跃: UDP ${_hop_cfg}"
+    if hop_verify; then
+      echo "规则状态: [正常] REDIRECT 规则存在"
+    else
+      echo "规则状态: [异常] REDIRECT 规则不存在 —— 客户端 mport=${_hop_cfg} 必然超时"
+      echo "  原因: 规则是非持久的内核状态，重启或被 1Panel/Docker/firewalld 改写 iptables 后即失效"
+      echo "  修复: 执行 sb 选项 4（启动）或 选项 6（重启）重建；根治需自行放行云安全组 UDP ${_hop_cfg}"
+    fi
+    echo "--- 规则明细 ---"
+    iptables -t nat -S PREROUTING 2>/dev/null | grep -i 'easy-singbox\|REDIRECT' || echo "iptables nat: 无相关规则"
+    nft list table ip easy_singbox 2>/dev/null || echo "nft: 无 easy_singbox 表"
+  fi
 
   _d_sec "10. 证书"
   ls -l "$SB_DIR_SSL" 2>/dev/null || echo "证书目录不存在: $SB_DIR_SSL"
@@ -339,8 +372,22 @@ diag_verdict() {
       echo "本机/公网自连        : 跳过（未启用任何 TCP 类协议）"
     fi
     echo "---- 结论 ----"
+    # 端口跳跃规则缺失的优先级最高：它会让"监听正常 + 自连正常"的服务端看起来
+    # 完全健康，而 Hy2 客户端仍必然超时。若不先判这一项，结论会落到最后那条
+    # "问题大概率在客户端配置"上——把用户往完全错误的方向引（这正是 v1.6.0 前的误报）。
+    local _hop="${HOP_HY2:-}" _hop_ok=1
+    [[ -n "$_hop" ]] && { hop_verify || _hop_ok=0; }
     if [[ $svc_up -ne 1 ]]; then
       echo "▶ 服务未运行 → 节点必然不通。查看“2.服务状态 / 3.日志”定位崩溃原因（常见：证书不可读、端口被占用、listen 绑定失败）。"
+    elif [[ -n "$_hop" && $_hop_ok -eq 0 ]]; then
+      echo "▶ [最可能] 端口跳跃 REDIRECT 规则缺失 → Hysteria2 用 mport 必然超时，这不是客户端问题。"
+      echo "  .state 记录了跳跃段 UDP $_hop（节点 URI 因此带 mport=$_hop），但内核里的 REDIRECT 规则不存在："
+      echo "  客户端向 $_hop 整段随机发包，无人接收 → 超时；而基础端口 ${PORT_HY2_LISTEN:-${PORT_HY2:-?}} 仍在监听、"
+      echo "  所以上面的「端口监听 / 自连」全绿，具有很强的迷惑性。"
+      echo "  规则是非持久的内核状态：重启、或被 1Panel/Docker/firewalld 改写 iptables 后即失效。"
+      echo "  修复：执行 sb 选项 4（启动）或 选项 6（重启）立即重建规则；"
+      echo "  根治：自行在云安全组/上游防火墙放行 UDP $_hop 整段（客户端 mport 跳变需要）。"
+      echo "  注：只放行基础端口时客户端仍可能连不上（客户端按 mport 轮换发包，不回退基础端口）。"
     elif [[ $bad -eq 1 ]]; then
       echo "▶ 服务在运行但部分端口未监听 → 查看“6.端口监听实况”与“3.日志”中 sing-box 启动报错（任一入站绑定失败会导致整个进程退出）。"
     elif [[ -z "$probe_port" ]]; then

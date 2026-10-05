@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# lib/firewall.sh — 防火墙后端适配（ufw → firewalld → iptables）
-# 端口开放三选一：1 全部(80+节点) / 2 关闭防火墙(开放所有) / 3 不开放
-# HTTP-01 模式下即使选 2/3 也需临时放行 80，完成后回收。
+# lib/firewall.sh — 防火墙：**只读探测 + 临时放行 80 + 显式关闭**，不做自动端口放行
+#
+# v1.6.0 起的边界（重要，勿回退）：
+# 本脚本**不再自动开放任何节点端口**，防火墙完全交由用户自行配置。
+# 原因：自动改防火墙在 1Panel / Docker / firewalld 等同机环境下极易与用户自己的
+# 管理冲突（对方的规则被 flush、或本脚本的规则被对方冲掉），且"自动放行"给的
+# 是虚假的安全感——云安全组/上游防火墙仍需手动配置。
+# 因此这里只保留三件事：
+#   1) fw_detect      —— 只读探测后端，供诊断报告展示现状
+#   2) fw_open_http_temp / fw_close_http_temp —— HTTP-01 签发期临时放行 80 并收回
+#      （这是签发必需且会自动回收的最小动作，与"长期开放节点端口"性质不同）
+#   3) fw_disable     —— 供主菜单「一键关闭防火墙」显式调用（用户主动要求）
 
 FW_BACKEND=""
 
 # 探测可用后端，结果存入 FW_BACKEND
 # 重要：仅当 ufw 处于 active 时才选 ufw 后端。若 ufw 已安装但 inactive，
-# 一律回退到 iptables 追加式 ACCEPT（绝不会“启用” ufw，避免默认拒绝锁死 SSH）。
+# 一律回退到 iptables（只影响 fw_disable 的收尾动作；探测本身不改任何规则）。
 fw_detect() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qw active; then
     FW_BACKEND="ufw"
@@ -21,102 +30,21 @@ fw_detect() {
   echo "$FW_BACKEND"
 }
 
-# 确保 SSH 端口在防火墙中被放行，防止远程锁死。
-# 探测 sshd 实际监听端口（默认 22），按当前后端追加允许规则。
-fw_ensure_ssh() {
-  local ssh_port=22 p
-  if command -v ss >/dev/null 2>&1; then
-    p=$(ss -tlnp 2>/dev/null | grep -E ':ssh\b|sshd' | grep -oE ':{1}[0-9]+' | head -1 | tr -d ':')
-    [[ -n "$p" ]] && ssh_port=$p
-  fi
-  case "$FW_BACKEND" in
-    ufw)       ufw allow "${ssh_port}/tcp" >/dev/null 2>&1 || true ;;
-    firewalld) firewall-cmd --permanent --add-port="${ssh_port}/tcp" >/dev/null 2>&1 || true; firewall-cmd --reload >/dev/null 2>&1 || true ;;
-    iptables)  iptables -I INPUT -p tcp --dport "$ssh_port" -j ACCEPT 2>/dev/null || true ;;
-    *)         : ;;
-  esac
-}
-
-# 开放端口（临时或永久）。proto: tcp|udp；port: 数字
-fw_open_port() {
-  local proto=$1 port=$2 perm=${3:-permanent}
-  case "$FW_BACKEND" in
-    ufw)
-      if [[ "$perm" == "temp" ]]; then
-        # ufw 无临时规则概念，用 iptables 兜底
-        iptables -I INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
-      else
-        ufw allow "$port/$proto" >/dev/null 2>&1 || true
-      fi
-      ;;
-    firewalld)
-      if [[ "$perm" == "temp" ]]; then
-        firewall-cmd --add-port="$port/$proto" 2>/dev/null || true
-      else
-        firewall-cmd --permanent --add-port="$port/$proto" 2>/dev/null || true
-        firewall-cmd --reload 2>/dev/null || true
-      fi
-      ;;
-    iptables)
-      iptables -I INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true
-      ;;
-    none)
-      : # 无防火墙后端，跳过
-      ;;
-  esac
-}
-
-# 关闭临时端口（仅对 iptables/firewalld temp 生效）
-fw_close_temp_port() {
-  local proto=$1 port=$2
-  case "$FW_BACKEND" in
-    ufw)       iptables -D INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true ;;
-    firewalld) firewall-cmd --remove-port="$port/$proto" 2>/dev/null || true ;;
-    iptables)  iptables -D INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null || true ;;
-  esac
-}
-
-# 开放端口段（如 50001-51000）。注意：Hysteria2 端口跳跃由 lib/port_hop.sh 通过
-# REDIRECT 在 PREROUTING 阶段将跳跃段重定向到基础监听端口，经重定向后的报文
-# 目的端口变为基础端口，因此 INPUT 只需放行基础端口即可（见 fw_apply_choice）。
-# 此函数保留供需要直接放行某端口段时调用。proto: tcp|udp；range: lo-hi
-fw_open_range() {
-  local proto=$1 range=$2 perm=${3:-permanent}
-  case "$FW_BACKEND" in
-    ufw)
-      if [[ "$perm" == "temp" ]]; then
-        iptables -I INPUT -p "$proto" --dport "$range" -j ACCEPT 2>/dev/null || true
-      else
-        ufw allow "$range/$proto" >/dev/null 2>&1 || true
-      fi
-      ;;
-    firewalld)
-      if [[ "$perm" == "temp" ]]; then
-        firewall-cmd --add-port="$range/$proto" 2>/dev/null || true
-      else
-        firewall-cmd --permanent --add-port="$range/$proto" 2>/dev/null || true
-        firewall-cmd --reload 2>/dev/null || true
-      fi
-      ;;
-    iptables)
-      iptables -I INPUT -p "$proto" --dport "$range" -j ACCEPT 2>/dev/null || true
-      ;;
-    none)
-      : # 无防火墙后端，跳过
-      ;;
-  esac
-}
-
-# 临时放行 80（HTTP-01 签发用），回显一个 token 供回收
+# ---------- HTTP-01 签发期的 80 临时放行（唯一保留的改规则路径）----------
+# acme.sh --standalone 需要 80 端口可达；签发完成（含失败路径）后立即收回。
+# ufw 没有临时规则概念，两种情况都退回 iptables 追加式 ACCEPT —— 该规则不带
+# --permanent，ufw disable 或重启后自然消失，不会污染用户的永久策略。
 fw_open_http_temp() {
-  fw_open_port tcp 80 temp
+  iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
 }
 
 fw_close_http_temp() {
-  fw_close_temp_port tcp 80
+  iptables -D INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
 }
 
-# 关闭防火墙（开放所有端口）。按后端执行对应操作；none 后端跳过。
+# ---------- 显式关闭防火墙（仅主菜单「一键关闭防火墙」调用）----------
+# 注意 iptables 分支会 `iptables -F INPUT`：**清空整条 INPUT 链**，
+# 其中可能包含用户自己写的规则（不只是本脚本的）。调用方必须先明确警告。
 fw_disable() {
   case "$FW_BACKEND" in
     ufw)       ufw disable >/dev/null 2>&1 || true ;;
@@ -134,45 +62,30 @@ fw_disable() {
   esac
 }
 
-# 按用户选择开放端口。参数：choice p_any p_hy2 p_tuic
-# choice: 1=全部 2=关闭防火墙 3=不开放
-# 注：Hysteria2 跳跃段经 REDIRECT 重定向到基础端口 p_hy2，INPUT 只需放行 p_hy2。
-fw_apply_choice() {
-  local choice=$1 p_any=$2 p_hy2=$3 p_tuic=$4 p_socks=${5:-}
-  fw_detect
-  # 仅放行实际生成的端口：调用方仅传入启用协议的端口，未启用端口为空自动跳过
-  # （v1.5.0 起无内核版本裁剪，内核恒为基线大版本 1.14.x）。
-  case "$choice" in
-    1)
-      # 先确保 SSH 端口放行，绝对避免远程锁死（尤其是 ufw 后端）
-      fw_ensure_ssh
-      fw_open_port tcp 80 permanent
-      [[ -n "$p_any" ]] && fw_open_port tcp "$p_any" permanent
-      [[ -n "$p_hy2" ]] && fw_open_port udp "$p_hy2" permanent
-      [[ -n "$p_tuic" ]] && fw_open_port udp "$p_tuic" permanent
-      # SOCKS5 只放行 tcp：其 UDP ASSOCIATE 转发用的是内核分配的随机高位端口
-      # （见 lib/protocol/socks.sh 注释），listen_port 上永远不会有 udp 监听，
-      # 放行 udp $p_socks 是空规则，还会让人误以为「UDP 已放行」。
-      [[ -n "$p_socks" ]] && fw_open_port tcp "$p_socks" permanent
-      ok "已通过 $FW_BACKEND 开放 22(SSH) + 80 + 已启用协议端口（Hy2 跳跃段由 REDIRECT 自动生效）"
-      if [[ -n "$p_socks" ]]; then
-        warn "SOCKS5 端口 $p_socks 已放行 tcp：该协议为明文，任何人均可探测到，请确保已设置用户名密码"
-        warn "SOCKS5 的 UDP 转发端口由内核随机分配（非 $p_socks），只放行本端口无法让 UDP 可用；"
-        warn "  需要 UDP 的流量请走 Hysteria2 / TUIC，或自行放行整个临时端口范围"
-      fi
-      ;;
-    2)
-      fw_disable
-      warn "已关闭防火墙，开放所有端口（存在安全风险，请确认网络环境可信）"
-      ;;
-    3)
-      # 拼接实际需要手动放行的协议端口（已启用的才列出）
-      local portlist=""
-      [[ -n "$p_any" ]] && portlist="$portlist TCP $p_any(AnyTLS)"
-      [[ -n "$p_hy2" ]] && portlist="$portlist UDP $p_hy2(Hy2)"
-      [[ -n "$p_tuic" ]] && portlist="$portlist UDP $p_tuic(TUIC)"
-      [[ -n "$p_socks" ]] && portlist="$portlist TCP $p_socks(SOCKS5/明文，仅 TCP)"
-      warn "未开放任何端口，请自行在防火墙/安全组中放行 22(SSH,避免锁死) + 80（仅 HTTP-01 需要）${portlist:+，以及 }${portlist}。若端口跳跃已启用，还需放行整个 UDP 跳跃段"
-      ;;
-  esac
+# ---------- 端口清单（只读打印，不改任何规则）----------
+# v1.6.0 起安装/变更时替代原来的「端口开放三选一」：脚本不再动防火墙，
+# 改为把用户需要自行放行的端口明确列出来（含云安全组与跳跃段）。
+# 参数：p_any p_hy2 p_tuic p_socks [hop_hy2]；未启用协议的端口传空串自动跳过。
+fw_print_port_checklist() {
+  local p_any=$1 p_hy2=$2 p_tuic=$3 p_socks=${4:-} hop=${5:-}
+  # 端口列宽固定 12，跳跃段（50001-51000 共 11 字符）也能对齐
+  local items=""
+  [[ -n "$p_any" ]]   && items="${items}  TCP  $(printf '%-12s' "$p_any")AnyTLS\n"
+  [[ -n "$p_hy2" ]]   && items="${items}  UDP  $(printf '%-12s' "$p_hy2")Hysteria2\n"
+  [[ -n "$p_tuic" ]]  && items="${items}  UDP  $(printf '%-12s' "$p_tuic")TUIC v5\n"
+  # SOCKS5 只列 TCP：其 UDP ASSOCIATE 走内核随机分配的临时高位端口（非本端口），
+  # 放行本端口的 udp 是空规则。需要 UDP 的流量请走 Hysteria2 / TUIC。
+  [[ -n "$p_socks" ]] && items="${items}  TCP  $(printf '%-12s' "$p_socks")SOCKS5（明文，仅 TCP）\n"
+  echo ""
+  info "本脚本不再自动修改防火墙。请自行在【云安全组 / 上游防火墙】放行以下端口："
+  printf "%b" "$items"
+  [[ -n "$hop" ]] && echo "  UDP  $(printf '%-12s' "$hop")Hysteria2 端口跳跃段（客户端 mport 在此段内跳变，必须整段放行）"
+  echo "  TCP  $(printf '%-12s' 22)SSH（若你启用防火墙，务必先放行 22，否则会把自己锁在门外）"
+  echo ""
+  warn "本机防火墙（ufw/firewalld/iptables）与云安全组是两套独立机制，都需放行才生效；"
+  warn "若不确定如何配置，可在主菜单执行 [11] 一键关闭防火墙（会暴露所有端口，含 SSH）。"
+  if [[ -n "$hop" ]]; then
+    warn "已启用 Hysteria2 端口跳跃（$hop）：本机只需放行基础端口 $p_hy2（跳跃段由 REDIRECT 自动转发），"
+    warn "  但客户端向整个 UDP $hop 范围随机发包，云安全组/上游防火墙必须放行该整段，否则 Hy2 报超时。"
+  fi
 }

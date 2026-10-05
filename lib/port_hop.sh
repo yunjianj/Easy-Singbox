@@ -18,6 +18,45 @@ hop_backend() {
   fi
 }
 
+# 校验跳跃规则是否真实存在于内核（静默，只用返回码表达）。
+# 为什么需要：REDIRECT 规则是**非持久的内核状态**——重启必丢，且 1Panel / Docker
+# / firewalld 等会重写 iptables-nft 表。.state 里的 HOP_HY2 只记录"当初配过"，
+# 并不代表规则还在。没有这个校验，规则悄悄消失时节点 URI 仍带 mport，
+# 客户端向整段端口发包却无人接收 → Hy2 超时，而诊断还会误判成"客户端问题"。
+# 返回 0=规则存在 / 1=不存在或无法确认
+hop_verify() {
+  local b; b=$(hop_backend)
+  case "$b" in
+    iptables)
+      # IPv4 规则存在即可（客户端绝大多数走 v4；纯 v6 站点另由 IPv6 规则兜底）
+      iptables -t nat -S PREROUTING 2>/dev/null | grep -q "$HOP_TAG"
+      ;;
+    nft)
+      nft list table ip easy_singbox 2>/dev/null | grep -q "redirect to"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# 按 .state 重建跳跃规则（幂等；未配置跳跃则 no-op）。
+# 与 hop_apply 的区别：本函数**只重建规则，绝不改动 .state**——
+# HOP_HY2 键的增删是 config_gen 的职责（规则建立失败时它才删键，避免 URI 带
+# 无效 mport）。这里若跟着删键，重启后一次失败就会永久抹掉用户的跳跃配置。
+# 调用时机：service_start / service_restart / service_reload（选项 4/6/3/7）。
+hop_reapply() {
+  [[ -f "$SB_STATE" ]] || return 0
+  # .state 可能由旧版本写出，键未必齐全，一律用 ${VAR:-}（sb 顶层 set -u，
+  # 裸引用缺失键会抛 unbound variable 直接终止脚本）
+  local hop="" base=""
+  if [[ -r "$SB_STATE" ]]; then
+    hop=$(grep -m1 '^HOP_HY2=' "$SB_STATE" 2>/dev/null | cut -d= -f2- || true)
+    base=$(grep -m1 '^PORT_HY2_LISTEN=' "$SB_STATE" 2>/dev/null | cut -d= -f2- || true)
+    [[ -n "$base" ]] || base=$(grep -m1 '^PORT_HY2=' "$SB_STATE" 2>/dev/null | cut -d= -f2- || true)
+  fi
+  [[ -n "$hop" && -n "$base" ]] || return 0
+  hop_apply "$base" "$hop"
+}
+
 # 清除本脚本设置的所有重定向规则（幂等，无规则也可安全调用）
 hop_remove() {
   local b; b=$(hop_backend)

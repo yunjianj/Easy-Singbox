@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.5.10"
+SB_SCRIPT_VERSION="1.6.0"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -337,23 +337,10 @@ sb_install() {
     esac
   fi
 
-  # 端口开放策略（回车默认 [1]）
-  echo "端口开放策略："
-  echo "  [1] 全部（22/SSH + 80 + 已启用协议端口；跳跃段经 REDIRECT 自动生效）"
-  echo "  [2] 开放所有端口（关闭防火墙）"
-  echo "  [3] 不开放（手动在防火墙/安全组配置）"
-  echo "  注意：切勿手动执行 ufw enable（脚本仅放行节点端口，未放行 22 会锁死 SSH）；本脚本已自动放行 22。"
-  # Hysteria2 实际监听为基础端口 port_hy2；跳跃段由 lib/port_hop.sh 通过
-  # REDIRECT 重定向到该端口，因此防火墙只需开放基础端口即可。
-  # 未启用的协议端口为空字符串，fw_apply_choice 会自动跳过。
-  local fwchoice; fwchoice=$(core_prompt "选择" "1")
-  fw_apply_choice "$fwchoice" "$port_any" "$port_hy2" "$port_tuic" "$port_socks"
-  if [[ -n "$hop_hy2" ]]; then
-    warn "已启用 Hysteria2 端口跳跃（$hop_hy2），节点 URI 将携带 mport=$hop_hy2。" \
-         "本地防火墙只需放行基础端口 $port_hy2（跳跃段由 REDIRECT 自动转发）；" \
-         "但客户端会向整个 UDP 范围随机发包，请务必在云安全组/上游防火墙放行 UDP $hop_hy2，" \
-         "否则 Hysteria2 将无法连接（报超时）。"
-  fi
+  # 端口开放：v1.6.0 起脚本不再自动改防火墙，改为打印需自行放行的清单。
+  # 详见 lib/firewall.sh 头部说明（与 1Panel/Docker 等同机管理冲突，且云安全组
+  # 本来也必须手动配，自动放行只会制造"已经放行了"的错觉）。
+  fw_print_port_checklist "$port_any" "$port_hy2" "$port_tuic" "$port_socks" "$hop_hy2"
 
   # 生成配置（protos + SOCKS5 参数一并传入）
   config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
@@ -396,6 +383,79 @@ sb_install() {
 
   # 节点输出
   node_gen
+}
+
+# ---------- 一键关闭防火墙（选项 11）----------
+# v1.6.0 起脚本不再自动配置防火墙（见 lib/firewall.sh 头部），端口一律由用户自管。
+# 这个选项是留给"不想自己折腾规则"的用户的显式出口，因此必须把风险讲透：
+# iptables 后端下 fw_disable 会 `iptables -F INPUT`，**清空整条 INPUT 链**，
+# 其中可能含用户自己写的规则；ufw 后端则直接 disable 整个 ufw。
+fw_disable_menu() {
+  core_root_check
+  # 注意：必须直接调用而不是 b=$(fw_detect)。fw_detect 通过给全局 FW_BACKEND 赋值
+  # 来记录后端，命令替换会在子 shell 里执行，赋值不会传回当前 shell —— 那样
+  # fw_disable 读到的 FW_BACKEND 会是空串，case 全部落空，表现为「点了没反应」。
+  fw_detect >/dev/null
+  local b=$FW_BACKEND
+  if [[ "$b" == "none" || -z "$b" ]]; then
+    warn "未检测到可用的防火墙后端（无 ufw / firewalld / iptables），无需操作"
+    return 0
+  fi
+  echo ""
+  warn "即将【一键关闭防火墙】，当前后端: $b"
+  case "$b" in
+    ufw)
+      echo "  将执行: ufw disable（停用 ufw，此后本机所有端口对外可达）"
+      ;;
+    firewalld)
+      echo "  将执行: 停止并禁用 firewalld 服务（此后本机所有端口对外可达）"
+      ;;
+    iptables)
+      echo "  将执行: iptables -P INPUT ACCEPT && iptables -F INPUT"
+      echo "  注意: -F INPUT 会【清空整条 INPUT 链】，其中可能包含你自己写的规则，不只是本脚本的"
+      ;;
+  esac
+  echo ""
+  warn "关闭后本机不再有任何入站过滤，所有端口（含 22 SSH、数据库等）将对公网暴露。"
+  warn "请确认你清楚后果，且已评估过暴露风险。"
+  echo ""
+  if ! core_prompt_yn "确认关闭防火墙？"; then
+    info "已取消"; return 0
+  fi
+  fw_disable
+  # 逐后端回报实际结果：fw_disable 内部是 || true 静默的，用户需要知道到底生效没有
+  local applied=1
+  case "$b" in
+    ufw)
+      if ufw status 2>/dev/null | grep -qw inactive; then
+        ok "ufw 已停用（ufw status: inactive）"
+      else
+        error "ufw 停用未生效，请手动执行: ufw disable"; applied=0
+      fi
+      ;;
+    firewalld)
+      if ! service_is_active firewalld; then
+        ok "firewalld 已停止并禁用"
+      else
+        error "firewalld 停止失败，请手动执行: systemctl disable --now firewalld"; applied=0
+      fi
+      ;;
+    iptables)
+      local pol; pol=$(iptables -S INPUT 2>/dev/null | head -1)
+      if [[ "$pol" == "-P INPUT ACCEPT" ]] \
+         && [[ "$(iptables -S INPUT 2>/dev/null | grep -c '^-A INPUT' || true)" == "0" ]]; then
+        ok "iptables INPUT 策略已设为 ACCEPT 且已清空规则"
+      else
+        error "iptables 清理未完全生效，当前 INPUT: ${pol:-读取失败}"; applied=0
+      fi
+      ;;
+  esac
+  echo ""
+  if [[ $applied -eq 1 ]]; then
+    ok "防火墙已关闭。sing-box 无需重启即可继续使用（配置与监听均未改动）"
+  else
+    error "防火墙关闭未完全成功，请按上方提示手动确认"
+  fi
 }
 
 # ---------- 卸载 ----------
@@ -643,10 +703,11 @@ sb_show_menu() {
   echo " [8] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
   echo " [9] 诊断与日志        (排查节点不通，生成可发送的报告)"
   echo " [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)"
+  echo " [11] 一键关闭防火墙      (开放所有端口；本脚本不再自动配置防火墙)"
   echo " [0] 退出"
   echo "=============================================================="
   local choice
-  choice=$(core_prompt "请选择 [0-10]")
+  choice=$(core_prompt "请选择 [0-11]")
   case "$choice" in
     1)
       if [[ -x "$SB_BIN" ]]; then sb_uninstall; else sb_install; fi
@@ -681,6 +742,7 @@ sb_show_menu() {
     8) sb_self_update || true ;;
     9) diag_menu || true ;;
     10) bbrfq_menu || true ;;
+    11) fw_disable_menu || true ;;
     0) info "退出"; exit 0 ;;
     *) warn "无效选择" ;;
   esac
