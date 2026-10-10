@@ -12,10 +12,12 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.6.1"
+SB_SCRIPT_VERSION="1.6.2"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
+# 内核版本检测缓存（与脚本缓存分开：内核发版低频，TTL 更长；格式同为 "版本|时间戳"）
+SB_KERNEL_VER_CACHE="$SB_DIR/.kernel_ver"
 
 # 自更新源（默认 GitHub raw 官方域名，避免第三方 CDN 缓存被投毒；可用环境变量覆盖）
 SB_UPDATE_BASE="${SB_UPDATE_BASE:-https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main}"
@@ -39,8 +41,9 @@ source "$SB_DIR/lib/bbrfq.sh"
 # ---------- sing-box 下载/安装 ----------
 # 获取本脚本适配的基线大版本（SB_VER_BASE）下最新的 patch 版本号（如 1.14.3）。
 # 从 GitHub Releases 列表过滤 v<base>.* 前缀的最新 tag；无网络/API 失败返回非零。
+# 参数可选：curl 超时秒数（默认 20；主面板启动检测等高频路径传小值，避免拖慢菜单）。
 sb_latest_version() {
-  local base="$SB_VER_BASE" tag best=""
+  local base="$SB_VER_BASE" tag best="" timeout=${1:-20}
   # 一次拉取最近 N 个 release，取与基线大版本匹配且最新的
   while IFS= read -r t; do
     t=${t#v}
@@ -54,7 +57,7 @@ sb_latest_version() {
         fi
         ;;
     esac
-  done < <(curl -s --max-time 20 \
+  done < <(curl -s --max-time "$timeout" \
       "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" \
       | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' || true)
   [[ -n "$best" ]] || return 1
@@ -194,6 +197,32 @@ sb_script_version_status() {
   [[ "$cur" == "$r" ]] && { echo "latest"; return; }
   newer=$(printf '%s\n%s\n' "$cur" "$r" | sort -V | tail -1) || true
   if [[ "$newer" == "$cur" ]]; then echo "latest"; else echo "update:$r"; fi
+}
+
+# 带本地缓存的内核版本状态：只关心基线大版本（SB_VER_BASE）下的最新补丁，
+# 输出 latest / update:<ver> / unknown（与脚本版本状态机同构）。
+# 注意两点：1) 大版本更新（如未来出 1.15）**故意不提示**——脚本只适配基线大版本，
+# 提示了也装不了（见 AGENTS §2 红线）；2) 缓存 TTL 1 小时，内核发版低频，
+# 且主面板每次渲染都会调一次，TTL 太短等于每次开菜单都联网。
+sb_kernel_version_status() {
+  local cur=$1 now cached_ts cached_ver r=""
+  # 未安装或探测不到版本时直接 unknown（菜单本就会显示"未安装"，无需再提示）
+  [[ -n "$cur" && "$cur" != "-" && "$cur" != "?" ]] || { echo "unknown"; return; }
+  now=$(date +%s) || now=0
+  if [[ -f "$SB_KERNEL_VER_CACHE" ]]; then
+    IFS='|' read -r cached_ver cached_ts < "$SB_KERNEL_VER_CACHE" 2>/dev/null || true
+    if [[ -n "$cached_ts" && -n "$cached_ver" && "$cached_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+          && $((now - cached_ts)) -lt 3600 ]]; then
+      r="$cached_ver"
+    fi
+  fi
+  if [[ -z "$r" ]]; then
+    r=$(sb_latest_version 8) || true
+    [[ -n "$r" ]] && echo "${r}|${now}" > "$SB_KERNEL_VER_CACHE" 2>/dev/null || true
+  fi
+  [[ -z "$r" ]] && { echo "unknown"; return; }
+  core_ver_ge "$cur" "$r" && { echo "latest"; return; }
+  echo "update:$r"
 }
 
 # ---------- 安装主流程 ----------
@@ -517,7 +546,7 @@ sb_version_menu() {
   fi
 
   info "当前 v$cur → 将升级至 v$latest"
-  if ! core_prompt_yn "确认升级内核？"; then
+  if ! core_prompt_yn "确认升级内核？" "y"; then
     info "已取消"; return 0
   fi
 
@@ -631,7 +660,7 @@ sb_self_update() {
   fi
   info "以下 $diffcnt 个文件有变更${newver:+（新版本 v$newver）}，将覆盖本地版本："
   printf '  - %s\n' "${changed[@]}"
-  if ! core_prompt_yn "确认覆盖本地文件并更新脚本？"; then
+  if ! core_prompt_yn "确认覆盖本地文件并更新脚本？" "y"; then
     warn "已取消更新，本地文件未被改动"; rm -rf "$tb"; return 0
   fi
 
@@ -649,7 +678,7 @@ sb_self_update() {
 
 # ---------- 主页面 ----------
 sb_show_menu() {
-  local vstat
+  local vstat kstat
   vstat=$(sb_script_version_status "$SB_SCRIPT_VERSION") || true
   # 清屏时机：默认进菜单就清屏（菜单要干净屏）；但上一轮打印了需要阅读/复制的
   # 长内容（节点 URI，选项 6）时**不清屏**——一 clear 就把刚打印的节点刷没了。
@@ -666,6 +695,10 @@ sb_show_menu() {
   # arch 显示名
   local arch_disp="$arch (AES-NI: $aes)"
   IFS='|' read -r inst running ver proto <<< "$(core_sb_status)"
+  # 内核新补丁检测（best-effort，失败静默：unknown 时不显示任何提示）。
+  # 注意顺序：kstat 的计算依赖 ver，所以放在 core_sb_status 之后；
+  # 缓存命中时无网络请求，不拖慢菜单。
+  kstat=$(sb_kernel_version_status "$ver") || true
 
   echo "=============================================================="
   echo -e "      ${C_BOLD}easy-singbox  管理面板${C_RST}  ${C_BOLD}v${SB_SCRIPT_VERSION}${C_RST}"
@@ -683,10 +716,15 @@ sb_show_menu() {
   if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
     echo -e "             ${C_RED}[内核版本过低：本脚本需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级]${C_RST}"
+  elif [[ "$kstat" == update:* ]]; then
+    # 同基线但有新补丁：绿色提示（仅提示，不自动升级；升级仍走选项 7 手动确认）。
+    # 低于基线时上面红字已覆盖，不再重复提示。
+    local kv="${kstat#update:}"
+    echo -e "             ${C_GRN}[发现新内核 v${kv}，可执行选项 7 升级]${C_RST}"
   fi
   case "$vstat" in
     latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
-    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_RED}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
+    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
     *)        echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_YEL}[远程版本未知，请检查网络]${C_RST}" ;;
   esac
   echo "--------------------------------------------------------------"

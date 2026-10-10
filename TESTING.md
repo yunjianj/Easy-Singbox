@@ -68,6 +68,8 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 - [ ] 选项 7 显示"已是最新版本，无需升级"（当前为 1.14.x 最新时）
 - [ ] 手动把 `/usr/local/bin/sing-box` 换成旧内核（如 1.13.x）后进入面板，出现红色「内核版本过低…请执行选项 7 升级」提示
 - [ ] 选项 7 一键升级：自动下载 1.14 大版本最新补丁（不可手动输入版本），服务正常，`sing-box check` 通过
+- [ ] 主面板启动检测（v1.6.2 起）：有新补丁时 Sing-Box 行下方绿色提示 `[发现新内核 vX.Y.Z，可执行选项 7 升级]`；已是最新时无提示行；断网时无提示（静默，不误报）；`cat /usr/local/share/easy-singbox/.kernel_ver` 缓存格式为 `版本|时间戳`
+- [ ] 选项 7 与选项 8 的确认默认为 y（直接回车即继续）；卸载 / 关防火墙 / 无校验安装的确认仍默认为 n
 - [ ] 升级失败时可从 `/usr/local/bin/sing-box.bak` 恢复
 - [ ] 升级后 `systemctl is-active sing-box` 为 `active`（脚本会轮询确认；起不来会自动回滚内核，不留半成品）
 

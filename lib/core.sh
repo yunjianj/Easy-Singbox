@@ -565,12 +565,21 @@ core_clearable() {
   printf '%s' "$v"
 }
 
-# core_prompt_yn <提示语>，返回 0=yes / 1=no（默认 no）
+# core_prompt_yn <提示语> [y]，返回 0=yes / 1=no。
+# 默认 no（显示 [y/N]）；第二个参数传 y 时默认 yes（显示 [Y/n]，空输入即确认）。
+# 默认 yes 只用于"更新"类确认（升级内核 / 更新脚本）：常规操作默认走下去，
+# 误回车也只是升个级。破坏性操作（卸载 / 删证书 / 关防火墙 / 无校验安装）
+# 一律保持默认 no，误回车必须是什么都不发生。
 core_prompt_yn() {
   local ans B N
   B=$'\001\e[1m\002'; N=$'\001\e[0m\002'
-  read -e -r -p "${B}${1}${N} [y/N]: " ans 1>&2 || ans=""
-  case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+  if [[ "${2:-}" == [yY] ]]; then
+    read -e -r -p "${B}${1}${N} [Y/n]: " ans 1>&2 || ans=""
+    case "$ans" in n|N|no|NO) return 1 ;; *) return 0 ;; esac
+  else
+    read -e -r -p "${B}${1}${N} [y/N]: " ans 1>&2 || ans=""
+    case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+  fi
 }
 
 # 检测端口是否已被监听占用；参数：port [tcp|udp]；返回 0=占用，1=空闲/无法探测

@@ -9,6 +9,8 @@
 # 版本检测/自更新缓存（sb 自更新时写）
 .script_ver
 .script_ver_*
+.kernel_ver
+.kernel_ver_*
 # 升级内核时留下的旧二进制备份
 *.bak
 # 一键引导 sb.sh 下载的整包
