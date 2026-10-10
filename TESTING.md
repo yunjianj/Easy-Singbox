@@ -55,6 +55,7 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 ## 6. 变更操作
 
 - [ ] 选项 2 变更端口/凭证后，`sing-box` reload 成功，节点 URI 更新
+- [ ] 选项 2 可关闭项能真正关闭：在跳跃段 / obfs / SOCKS5 用户名密码提示中输入 `-`，对应配置被清除（`HOP_HY2` 为空且节点无 `mport` / `OBS_HY2` 为空 / socks inbound 无 `users` 块）；全回车则保持旧值不变
 - [ ] 选项 3 变更证书配置（切验证方式/改域名/强制重签）后 reload 成功
 
 ## 7. 证书续期演练

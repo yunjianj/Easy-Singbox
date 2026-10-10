@@ -550,6 +550,21 @@ core_prompt() {
   echo "$ans"
 }
 
+# core_clearable <值>：把显式清除关键字归一化为空串。
+# 背景：core_prompt 的语义是"空输入 = 用默认值"，所以有默认值的"可关闭项"
+# （hy2 obfs / 端口跳跃段 / socks 用户名密码）永远无法通过"留空"来关闭——
+# 留空只会保留旧值。约定：输入单独一个 `-` 表示清除，其余原样返回。
+# 只认 `-`（不认 off/none）：后两者可能是合法密码，误杀代价更高；
+# 而跳跃段是纯数字范围，`-` 不可能是合法值，零误杀。密码恰为单个 `-` 的
+# 极端情况不予支持（提示词已明示 `-` = 清除）。
+core_clearable() {
+  local v=${1:-}
+  # 纯 bash 去首尾空白（不 fork sed，busybox 安全）
+  v=${v#"${v%%[![:space:]]*}"}; v=${v%"${v##*[![:space:]]}"}
+  [[ "$v" == "-" ]] && v=""
+  printf '%s' "$v"
+}
+
 # core_prompt_yn <提示语>，返回 0=yes / 1=no（默认 no）
 core_prompt_yn() {
   local ans B N

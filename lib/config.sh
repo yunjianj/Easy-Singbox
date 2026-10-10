@@ -9,8 +9,11 @@
 config_gen() {
   local domain=$1 port_any=$2 port_hy2=$3 port_tuic=$4 \
         pass_any=$5 pass_hy2=$6 pass_tuic=$7 uuid_tuic=$8 \
-        obfs_hy2=${9:-} hop_hy2=${10:-${HOP_HY2:-}} \
+        obfs_hy2=${9:-} hop_hy2=${10-${HOP_HY2:-}} \
         protos=${11:-} port_socks=${12:-} user_socks=${13:-} pass_socks=${14:-}
+  # 注意 hop_hy2 用 ${10-...}（不带冒号）：只在"第 10 个参数根本没传"时才回退
+  # 旧 .state 的值；传了空串 = 用户显式关闭跳跃，必须保持空。用 :- 的话，
+  # 选项 2 里用户清除跳跃后传进来的空串会被旧值"复活"，跳跃永远关不掉。
 
   # v1.5.0 起只适配基线大版本（SB_VER_BASE=1.14）：所有启用协议恒按最新语法生成，
   # 不再探测已装内核版本做语法分支/裁剪。安装/升级流程保证内核即为 1.14.x。
@@ -177,7 +180,7 @@ EOF
 # 内部：凭证类输入（密码 / obfs）合法性校验。
 # 采用白名单：仅允许字母数字与常见安全符号，拒绝引号、反斜杠、$、反引号、空白、
 # 控制字符与其它 shell / JSON 元字符——这些字符会破坏 .state（被 source 的 shell
-# 文件）与 config.json 的结构。空值视为合法（obfs 允许留空关闭）。
+# 文件）与 config.json 的结构。空值视为合法（obfs / 跳跃段 / socks 认证允许关闭）。
 _config_credential_ok() {
   local v=$1
   [[ -z "$v" ]] && return 0
@@ -212,7 +215,7 @@ config_pick_protos() {
   # 选择 SOCKS5 时明确告警（唯一非 TLS 协议）
   if [[ " $picked " == *" socks "* ]]; then
     warn "SOCKS5 为明文协议（sing-box socks inbound 不支持 TLS），握手与目标地址可被链路识别。" >&2
-    warn "已默认生成随机用户名与密码；若留空将关闭认证，等同开放代理，极易被扫描滥用。" >&2
+    warn "已默认生成随机用户名与密码；稍后提示中输入 - 可清除认证（等同开放代理，极易被扫描滥用）。" >&2
     warn "SOCKS5 仅 TCP 可用：其 UDP ASSOCIATE 走内核随机分配的临时端口（非本端口），" >&2
     warn "  需放行整个临时端口范围才能穿透云安全组；需要 UDP 的流量请选 Hysteria2 / TUIC。" >&2
   fi
@@ -263,20 +266,26 @@ config_change() {
   fi
   if [[ " $chosen " == *" socks "* ]]; then
     port_socks=$(core_prompt "SOCKS5 端口" "${PORT_SOCKS:-$(core_rand_port)}")
-    # 默认随机用户名/密码；两者任一留空 = 关闭认证（不推荐，等同开放代理）
-    user_socks=$(core_prompt "SOCKS5 用户名(留空=关闭认证，不推荐)" "${USER_SOCKS:-$(core_rand_user)}")
-    pass_socks=$(core_prompt "SOCKS5 密码(留空=关闭认证)" "${PASS_SOCKS:-$(core_rand_pass)}")
+    # 默认随机用户名/密码；任一为空 = 关闭认证（不推荐，等同开放代理）。
+    # core_prompt 空输入=保留旧值，所以"清除"必须显式输入 `-`（见 core_clearable）。
+    user_socks=$(core_prompt "SOCKS5 用户名(回车保持不变，输入 - 关闭认证，不推荐)" "${USER_SOCKS:-$(core_rand_user)}")
+    user_socks=$(core_clearable "$user_socks")
+    pass_socks=$(core_prompt "SOCKS5 密码(回车保持不变，输入 - 关闭认证)" "${PASS_SOCKS:-$(core_rand_pass)}")
+    pass_socks=$(core_clearable "$pass_socks")
   else
     # 未选 SOCKS5：保留原认证配置（下次启用时恢复），端口留空跳过 inbound
     user_socks="${USER_SOCKS:-}"
     pass_socks="${PASS_SOCKS:-}"
   fi
-  obfs=$(core_prompt "Hysteria2 obfs 密码(留空关闭)" "${OBS_HY2:-}")
-  hop=$(core_prompt "Hysteria2 端口跳跃段(如 50001-51000，留空关闭)" "${HOP_HY2:-}")
+  # obfs / 跳跃段同理：可关闭项，空输入=保持旧值，输入 `-` = 关闭。
+  obfs=$(core_prompt "Hysteria2 obfs 密码(回车保持不变，输入 - 关闭)" "${OBS_HY2:-}")
+  obfs=$(core_clearable "$obfs")
+  hop=$(core_prompt "Hysteria2 端口跳跃段(回车保持不变，输入 - 关闭)" "${HOP_HY2:-}")
+  hop=$(core_clearable "$hop")
 
   # 输入校验（安全）：凭证类手动输入此前允许任意字符，含引号/反斜杠/$/反引号/空白
   # 的输入会破坏 .state（被 source 的 shell 文件）与 config.json 结构。
-  # 此处统一用白名单拦截；空值合法（obfs 可留空关闭）。
+  # 此处统一用白名单拦截；空值合法（可关闭项允许为空）。
   local _item _name _val
   for _item in "AnyTLS 密码:$pass_any" \
                "Hysteria2 密码:$pass_hy2" \

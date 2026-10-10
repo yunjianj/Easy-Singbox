@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.6.0"
+SB_SCRIPT_VERSION="1.6.1"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -332,7 +332,8 @@ sb_install() {
         info "不启用 Hysteria2 端口跳跃"
         ;;
       *)
-        hop_hy2=$(core_prompt "Hysteria2 跳跃段(留空使用默认 50001-51000)" "50001-51000")
+        hop_hy2=$(core_prompt "Hysteria2 跳跃段(留空使用默认 50001-51000，输入 - 不启用)" "50001-51000")
+        hop_hy2=$(core_clearable "$hop_hy2")
         ;;
     esac
   fi
