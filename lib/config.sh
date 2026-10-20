@@ -277,11 +277,25 @@ config_change() {
     user_socks="${USER_SOCKS:-}"
     pass_socks="${PASS_SOCKS:-}"
   fi
-  # obfs / 跳跃段同理：可关闭项，空输入=保持旧值，输入 `-` = 关闭。
-  obfs=$(core_prompt "Hysteria2 obfs 密码(回车保持不变，输入 - 关闭)" "${OBS_HY2:-}")
-  obfs=$(core_clearable "$obfs")
-  hop=$(core_prompt "Hysteria2 端口跳跃段(回车保持不变，输入 - 关闭)" "${HOP_HY2:-}")
-  hop=$(core_clearable "$hop")
+  # obfs / 跳跃段是 Hysteria2 专属，只在启用 Hy2 时询问（未启用时不得打扰用户）。
+  # 均为可关闭项：空输入=保持旧值，输入 `-` = 关闭。
+  if [[ " $chosen " == *" hysteria2 "* ]]; then
+    obfs=$(core_prompt "Hysteria2 obfs 密码(回车保持不变，输入 - 关闭)" "${OBS_HY2:-}")
+    obfs=$(core_clearable "$obfs")
+    hop=$(core_prompt "Hysteria2 端口跳跃段(如 50001-51000；回车保持不变，输入 - 关闭)" "${HOP_HY2:-}")
+    hop=$(core_clearable "$hop")
+  else
+    # 未启用 Hy2：obfs 是客户端凭证，保留旧值（下次启用时作默认值）。
+    # 跳跃段属于 Hy2 的服务端 REDIRECT 配置，随协议关闭一并置空——否则 .state 会出现
+    # 「HOP_HY2 非空但没有 Hy2 inbound」的悬空状态：诊断 §9/§13 会误报"规则缺失"，
+    # config_gen 的跳跃段重叠校验也会无谓参与。清理规则本身由 config_gen 的
+    # hop_remove（幂等）完成。
+    obfs="${OBS_HY2:-}"
+    if [[ -n "${HOP_HY2:-}" ]]; then
+      info "未启用 Hysteria2：已清除原有端口跳跃段 ${HOP_HY2}（REDIRECT 规则同步清理）"
+    fi
+    hop=""
+  fi
 
   # 输入校验（安全）：凭证类手动输入此前允许任意字符，含引号/反斜杠/$/反引号/空白
   # 的输入会破坏 .state（被 source 的 shell 文件）与 config.json 结构。

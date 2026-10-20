@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.6.2"
+SB_SCRIPT_VERSION="1.6.3"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -347,34 +347,16 @@ sb_install() {
       ;;
   esac
 
-  # Hysteria2 端口跳跃（仅启用 Hy2 时询问）
-  local enable_hop hop_hy2=""
-  if [[ " $chosen " == *" hysteria2 "* ]]; then
-    echo "Hysteria2 端口跳跃："
-    echo "  说明：sing-box 核心 inbound 不支持服务端端口跳跃，本脚本用 nftables/iptables REDIRECT"
-    echo "  把跳跃段重定向到基础监听端口，回包由 conntrack 自动还原源端口，客户端 mport 跳变可用。"
-    echo "  启用后节点 URI 将携带 mport=跳跃段，客户端会随机跳变入站端口，抗封锁更强。"
-    enable_hop=$(core_prompt "是否启用 Hysteria2 端口跳跃(REDIRECT 冗余)" "y")
-    case "$enable_hop" in
-      n|N|no|NO)
-        hop_hy2=""
-        info "不启用 Hysteria2 端口跳跃"
-        ;;
-      *)
-        hop_hy2=$(core_prompt "Hysteria2 跳跃段(留空使用默认 50001-51000，输入 - 不启用)" "50001-51000")
-        hop_hy2=$(core_clearable "$hop_hy2")
-        ;;
-    esac
-  fi
-
+  # Hysteria2 端口跳跃与 obfs 不在安装流程中询问：二者都属于 Hy2 的可选增强，
+  # 统一放到主菜单 [2] 变更代理配置（启用 Hy2 时才有对应提示），避免安装流程过长。
   # 端口开放：v1.6.0 起脚本不再自动改防火墙，改为打印需自行放行的清单。
   # 详见 lib/firewall.sh 头部说明（与 1Panel/Docker 等同机管理冲突，且云安全组
   # 本来也必须手动配，自动放行只会制造"已经放行了"的错觉）。
-  fw_print_port_checklist "$port_any" "$port_hy2" "$port_tuic" "$port_socks" "$hop_hy2"
+  fw_print_port_checklist "$port_any" "$port_hy2" "$port_tuic" "$port_socks" ""
 
-  # 生成配置（protos + SOCKS5 参数一并传入）
+  # 生成配置（protos + SOCKS5 参数一并传入；obfs/跳跃段留空，后续在选项 2 配置）
   config_gen "$domain" "$port_any" "$port_hy2" "$port_tuic" \
-             "$pass_any" "$pass_hy2" "$pass_tuic" "$uuid" "" "$hop_hy2" \
+             "$pass_any" "$pass_hy2" "$pass_tuic" "$uuid" "" "" \
              "$protos" "$port_socks" "$user_socks" "$pass_socks" || return 1
 
   # 服务

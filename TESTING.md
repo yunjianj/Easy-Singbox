@@ -21,6 +21,7 @@ bash install.sh
 - [ ] `sing-box` 进程运行：`systemctl is-active sing-box` == `active`
 - [ ] `sb` 命令可用：`which sb` 指向 `/usr/local/bin/sb`
 - [ ] 再次执行 `sb` 进入主页面，状态显示「已运行 / 3 协议在线」
+- [ ] 安装流程**不再询问** Hysteria2 obfs / 端口跳跃（v1.6.3 起统一放到选项 2）
 - [ ] `/etc/sing-box/config.json` 存在且 `sing-box check` 通过
 - [ ] `/etc/sing-box/ssl/{fullchain.pem,privkey.pem}` 存在，权限 600
 
@@ -56,6 +57,8 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 
 - [ ] 选项 2 变更端口/凭证后，`sing-box` reload 成功，节点 URI 更新
 - [ ] 选项 2 可关闭项能真正关闭：在跳跃段 / obfs / SOCKS5 用户名密码提示中输入 `-`，对应配置被清除（`HOP_HY2` 为空且节点无 `mport` / `OBS_HY2` 为空 / socks inbound 无 `users` 块）；全回车则保持旧值不变
+- [ ] 选项 2 未选 Hysteria2（如改选 `ac`）时**不询问** obfs / 跳跃段；`OBS_HY2` 保留、`HOP_HY2` 被清空并提示「已清除原有端口跳跃段」；节点 URI 只含已启用协议
+- [ ] 选项 2 重新选回 Hysteria2 时，obfs 提示带出保留的旧值，跳跃段默认为空（需重新输入，如 `50001-51000`）
 - [ ] 选项 3 变更证书配置（切验证方式/改域名/强制重签）后 reload 成功
 
 ## 7. 证书续期演练
