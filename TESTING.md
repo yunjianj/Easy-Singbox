@@ -22,6 +22,7 @@ bash install.sh
 - [ ] `sb` 命令可用：`which sb` 指向 `/usr/local/bin/sb`
 - [ ] 再次执行 `sb` 进入主页面，状态显示「已运行 / 3 协议在线」
 - [ ] 安装流程**不再询问** Hysteria2 obfs / 端口跳跃（v1.6.3 起统一放到选项 2）
+- [ ] 在 Debian/Ubuntu（默认 `awk` 为 mawk 1.3.4）上执行引导脚本，显示「内容完整性校验通过（与 GitHub 官方 blob SHA1 逐文件比对）」，**不出现**「无法获取官方内容校验值」的降级确认（v1.6.4 修复项）
 - [ ] `/etc/sing-box/config.json` 存在且 `sing-box check` 通过
 - [ ] `/etc/sing-box/ssl/{fullchain.pem,privkey.pem}` 存在，权限 600
 
@@ -73,6 +74,7 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 - [ ] 选项 7 一键升级：自动下载 1.14 大版本最新补丁（不可手动输入版本），服务正常，`sing-box check` 通过
 - [ ] 主面板启动检测（v1.6.2 起）：有新补丁时 Sing-Box 行下方绿色提示 `[发现新内核 vX.Y.Z，可执行选项 7 升级]`；已是最新时无提示行；断网时无提示（静默，不误报）；`cat /usr/local/share/easy-singbox/.kernel_ver` 缓存格式为 `版本|时间戳`
 - [ ] 选项 7 与选项 8 的确认默认为 y（直接回车即继续）；卸载 / 关防火墙 / 无校验安装的确认仍默认为 n
+- [ ] 在 mawk 主机（Debian/Ubuntu 默认）上执行选项 8 自更新，内容校验通过，不出现「无法校验，是否继续」降级提示（v1.6.4 修复项）
 - [ ] 升级失败时可从 `/usr/local/bin/sing-box.bak` 恢复
 - [ ] 升级后 `systemctl is-active sing-box` 为 `active`（脚本会轮询确认；起不来会自动回滚内核，不留半成品）
 

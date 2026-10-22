@@ -14,7 +14,7 @@
 | 协议 | a=anytls / b=hysteria2 / c=tuic / d=socks（均强制 TLS，socks 除外） |
 | 脚本版本 | 三处同步：`sb` 的 `SB_SCRIPT_VERSION`、根 `VERSION`、`README.md` 面板示例 |
 | 必跑测试 | 无自动化脚本测试；按 `TESTING.md` 在服务器上做端到端验证 |
-| shell | 目标环境含 busybox（OpenWrt/安卓 Termux），**禁止** `sort -V`、`awk length()` 等非 POSIX 依赖 |
+| shell | 目标环境含 busybox（OpenWrt/安卓 Termux），**禁止** `sort -V` 等 GNU 扩展；`awk length()` 不可用于**中文显示宽度**（busybox 按字节计，改用 `core_dwidth`） |
 | 换行 | `.gitattributes` 强制 LF；提交 shell 脚本时不得引入 CRLF（会嵌入 `\r` 导致服务起不来） |
 
 **最高优先级的 5 条红线**（违反即回滚）：
@@ -227,7 +227,10 @@ sb_latest_version()    # sb 内：查 GitHub Releases 取 SB_VER_BASE.x 大版�
 1. `bash -n` 语法检查所有改动的 shell 文件。
 2. 确认无 CRLF：`git diff | grep -c $'\r'` 应为 0。
 3. 确认没引入新外部依赖（`command -v` 探测的工具必须在 busybox / 精简发行版存在）。
-4. 若改了协议或配置生成：更新 §2.2 表格与 `README.md` 对应描述。
+4. **awk 正则不要用 `{n}` / `{n,m}` 区间表达式**：Debian/Ubuntu 默认的 mawk 1.3.4
+   不支持，条件会恒不成立（历史上导致内容校验映射解析为空、误报「GitHub API 不可达」）。
+   定长十六进制串用 `length(s)==40 && s ~ /^[0-9a-f]+$/`。
+5. 若改了协议或配置生成：更新 §2.2 表格与 `README.md` 对应描述。
 
 ## 6. 提交与上传节奏
 

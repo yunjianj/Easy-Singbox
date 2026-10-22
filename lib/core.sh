@@ -707,11 +707,14 @@ core_verify_repo_files() {
   if [[ -z "$tree_json" ]]; then return 2; fi
   # GitHub API 返回美化 JSON（字段分行），按 path → type → sha 顺序解析出 blob 映射；
   # 首个 sha 是树对象自身的摘要（此时 p 为空），会被 p != "" 条件自然跳过。
+  # 注意：不要用 /^[0-9a-f]{40}$/ —— Debian/Ubuntu 默认的 mawk 1.3.4 默认不支持
+  # {n} 区间表达式，条件恒不成立会让映射整体为空、误报「GitHub API 不可达」。
+  # 用 length() 判 ASCII 十六进制串长度是 POSIX 且 mawk/busybox 均支持。
   map=$(printf '%s' "$tree_json" | awk '
     /"path":/ { p=$0; gsub(/.*"path": *"|",?$/,"",p); next }
     /"type":/ { t=$0; gsub(/.*"type": *"|",?$/,"",t); next }
     /"sha":/ && p != "" { s=$0; gsub(/.*"sha": *"|",?$/,"",s)
-                          if (t=="blob" && s ~ /^[0-9a-f]{40}$/) print p" "s; p=""; t=""; next }
+                          if (t=="blob" && length(s)==40 && s ~ /^[0-9a-f]+$/) print p" "s; p=""; t=""; next }
   ' || true)
   if [[ -z "$map" ]]; then return 2; fi
   for f in "$@"; do
