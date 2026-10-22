@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.6.4"
+SB_SCRIPT_VERSION="1.6.5"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -252,7 +252,7 @@ sb_install() {
   core_ensure_dualstack
 
   # 证书 + 域名
-  local domain mode token
+  local domain mode
   domain=$(core_prompt "节点域名（用于 TLS 证书与节点连接）" "")
   [[ -z "$domain" ]] && { error "域名不能为空"; return 1; }
   # 输入校验（与 cert_change 保持一致）：仅允许域名合法字符，拒绝 /、&、\、空格、
@@ -269,8 +269,7 @@ sb_install() {
 
   cert_install_acme || return 1
   if [[ "$mode" == "2" ]]; then
-    token=$(core_prompt "Cloudflare API Token")
-    cert_issue_dns01_cf "$domain" "$token" || return 1
+    cert_issue_dns01_cf_retry "$domain" || return 1
   else
     cert_issue_http01 "$domain" || return 1
   fi

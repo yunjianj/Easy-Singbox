@@ -223,20 +223,25 @@ cert_issue_http01() {
   ok "HTTP-01 证书已签发并安装到 $SB_DIR_SSL"
 }
 
+# 持久化 CF_Token 供 acme.sh cron 续期使用（权限 600，仅本机）。
+# 只在签发/复用成功后写入：错误 Token 不落盘，避免覆盖掉旧的可用凭证。
+cert_save_cf_token() {
+  printf 'CF_Token=%s\n' "$1" > "$SB_CF_ENV"
+  chmod 600 "$SB_CF_ENV"; chown root:root "$SB_CF_ENV"
+}
+
 # DNS-01(Cloudflare) 签发（无需 80）。参数：domain token [force]；force=1 时强制重签。
 cert_issue_dns01_cf() {
   local domain=$1 token=$2 force=${3:-0}
   [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
   mkdir -p "$SB_DIR_SSL"
-  # 持久化 CF_Token 以便续期（权限 600，仅本机；复用/重签都需写入，acme.sh cron 依赖）
-  printf 'CF_Token=%s\n' "$token" > "$SB_CF_ENV"
-  chmod 600 "$SB_CF_ENV"; chown root:root "$SB_CF_ENV"
   export CF_Token="$token"
   # 重装场景：非 force 且已持有同域名有效证书时复用（避免 --issue 跳过被误判失败）
   if [[ "$force" != "1" ]] && cert_has_valid "$domain"; then
     unset CF_Token
     info "acme.sh 已持有 $domain 的有效证书，直接安装复用"
     cert_install_files "$domain"
+    cert_save_cf_token "$token"
     ok "DNS-01 证书已安装到 $SB_DIR_SSL（复用既有证书，CF Token 已持久化供续期）"
     return 0
   fi
@@ -250,7 +255,26 @@ cert_issue_dns01_cf() {
   fi
   unset CF_Token
   cert_install_files "$domain"
+  cert_save_cf_token "$token"
   ok "DNS-01 证书已签发并安装到 $SB_DIR_SSL"
+}
+
+# 交互式 DNS-01 签发：Token 错误/权限不足导致签发失败时，回到输入 Token 步骤重试。
+# 参数：domain [force]；返回 0=签发成功，1=用户取消（留空）或 acme.sh 缺失。
+cert_issue_dns01_cf_retry() {
+  local domain=$1 force=${2:-0} token
+  [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
+  while :; do
+    token=$(core_prompt "Cloudflare API Token（留空取消）")
+    if [[ -z "$token" ]]; then
+      warn "已取消 DNS-01 签发"
+      return 1
+    fi
+    if cert_issue_dns01_cf "$domain" "$token" "$force"; then
+      return 0
+    fi
+    warn "Token 无效或缺少 Zone:DNS 编辑权限，请重新输入（留空取消）"
+  done
 }
 
 # 续期（依赖 acme.sh cron；签发时已写入 reloadcmd）
@@ -266,7 +290,7 @@ cert_renew() {
 
 # 变更证书配置（主页面选项 3）
 cert_change() {
-  local domain mode token
+  local domain mode
   if [[ ! -f "$SB_CONF" ]]; then
     error "尚未安装，请先执行安装（选项 1）"
     return 1
@@ -289,8 +313,7 @@ cert_change() {
   # 与"安装复用既有证书"（sb_install 默认行为）相区分。签发失败必须中止并返回非零，
   # 不能静默继续（否则下方提示"已变更"但实际证书没更新）。
   if [[ "$mode" == "2" ]]; then
-    token=$(core_prompt "Cloudflare API Token")
-    cert_issue_dns01_cf "$domain" "$token" 1 || return 1
+    cert_issue_dns01_cf_retry "$domain" 1 || return 1
   else
     cert_issue_http01 "$domain" 1 || return 1
   fi

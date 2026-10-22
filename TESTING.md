@@ -38,6 +38,7 @@ bash install.sh
 - [ ] 准备 Cloudflare API Token（Zone:DNS:Edit）
 - [ ] 安装时选 DNS-01，填入 Token，无需 80 端口即可签发
 - [ ] `/etc/sing-box/.cf.env` 存在，权限 600，含 `CF_Token=...`
+- [ ] 故意填入错误 Token：签发失败后**回到 Token 输入步骤**并可重试；留空回车取消，且旧的 `.cf.env` 不被错误 Token 覆盖（v1.6.5）
 
 ## 4. 节点 URI 与导入
 
