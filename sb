@@ -665,7 +665,7 @@ sb_show_menu() {
   # 长内容（节点 URI，选项 6）时**不清屏**——一 clear 就把刚打印的节点刷没了。
   # 不清屏的这一轮由 main_menu 等一次回车后再重绘，见 main_menu。
   [[ -n "${SB_KEEP_SCREEN:-}" ]] || clear 2>/dev/null || true
-  local os arch virt bbr ipregion status inst running ver proto kernel_hint=""
+  local os arch virt bbr ipregion status inst running ver proto kernel_hint="" ip_first=1
   os=$(core_detect_os)
   arch=$(core_detect_arch)
   # AES-NI 探测
@@ -688,10 +688,16 @@ sb_show_menu() {
   echo " 指令集    : $arch_disp"
   echo " 虚拟化    : $virt"
   echo " BBR / FQ  : $bbr"
-  echo " IP / 地区 : "
   while IFS= read -r line; do
-    [[ -n "$line" ]] && echo "             $line"
+    [[ -n "$line" ]] || continue
+    if (( ip_first )); then
+      echo " IP / 地区 : $line"
+      ip_first=0
+    else
+      echo "             $line"
+    fi
   done <<< "$ipregion"
+  (( ip_first )) && echo " IP / 地区 :"
   # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
   if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
