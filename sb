@@ -665,7 +665,7 @@ sb_show_menu() {
   # 长内容（节点 URI，选项 6）时**不清屏**——一 clear 就把刚打印的节点刷没了。
   # 不清屏的这一轮由 main_menu 等一次回车后再重绘，见 main_menu。
   [[ -n "${SB_KEEP_SCREEN:-}" ]] || clear 2>/dev/null || true
-  local os arch virt bbr ipregion status inst running ver proto
+  local os arch virt bbr ipregion status inst running ver proto kernel_hint=""
   os=$(core_detect_os)
   arch=$(core_detect_arch)
   # AES-NI 探测
@@ -690,21 +690,20 @@ sb_show_menu() {
   echo " BBR / FQ  : $bbr"
   echo " IP / 地区 : "
   while IFS= read -r line; do
-    [[ -n "$line" ]] && echo "             $line"
+    [[ -n "$line" ]] && echo " $line"
   done <<< "$ipregion"
-  echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
   # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
   if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
-    echo -e "             ${C_RED}[内核版本过低：本脚本需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级]${C_RST}"
+    kernel_hint="${C_RED}[内核低于基线，选项 7 升级]${C_RST}"
   elif [[ "$kstat" == update:* ]]; then
     # 同基线但有新补丁：粉色提示（仅提示，不自动升级；升级仍走选项 7 手动确认）。
-    # 低于基线时上面红字已覆盖，不再重复提示。
     local kv="${kstat#update:}"
-    echo -e "             ${C_PNK}[发现新内核 v${kv}，可执行选项 7 升级]${C_RST}"
+    kernel_hint="${C_PNK}[发现新内核 v${kv}，选项 7 升级]${C_RST}"
   elif [[ "$kstat" == latest ]]; then
-    echo -e "             ${C_GRN}[内核已是最新]${C_RST}"
+    kernel_hint="${C_GRN}[内核已是最新]${C_RST}"
   fi
+  echo -e " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)${kernel_hint:+  $kernel_hint}"
   case "$vstat" in
     latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
     update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_PNK}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
