@@ -85,7 +85,8 @@ core_detect_bbr() {
   fi
 }
 
-# 内部：查询 ipwho.is（HTTPS）并解析为 "国家/城市 / ISP"，失败返回 "未知/未知 / 未知"
+# 内部：查询 ipwho.is（HTTPS）并解析为两行："国家/城市"、"ISP"。
+# 失败时返回 "未知/未知" 和 "未知"，供面板分别排版，避免长 IP 行被终端自动折行。
 _core_ipwho_query() {
   local ip=$1 geo region city isp url
   # IPv6 地址含冒号，部分 curl 版本/HTTP 代理会把 URL 路径中的裸冒号误当 port
@@ -101,7 +102,7 @@ _core_ipwho_query() {
   [[ -z "$region" ]] && region="未知"
   [[ -z "$city" ]]   && city="未知"
   [[ -z "$isp" ]]    && isp="未知"
-  echo "$region/$city / $isp"
+  printf '%s\n%s\n' "$region/$city" "$isp"
 }
 
 # 内部：判断本机是否有 IPv6 出网能力（IPv6 默认路由，或全局作用域 IPv6 地址含 ULA）。
@@ -127,17 +128,20 @@ _core_probe_v6() {
   return 1
 }
 
-# 双栈公网 IP 与地理位置检测（精确到城市），返回两行：
-#   IPv4 <ip> | <国家>/<城市> / <ISP>
-#   IPv6 <ip> | <国家>/<城市> / <ISP>
-# 某协议无公网出口时对应行显示"不支持（本机无公网 IPv4/IPv6）"。
+# 双栈公网 IP 与地理位置检测（精确到城市），每个地址分行显示 IP、地区和运营商，
+# 避免 IPv6 地址和较长 ISP 名称挤在同一行。某协议无公网出口时显示不支持原因。
 # IPv4/IPv6 分别探测：api.ipify.org 仅返回 IPv4，api6.ipify.org 仅返回 IPv6。
 # 安全要求：全部走 HTTPS（明文会泄露服务器公网 IP 且可被中间人篡改）。
 core_detect_ip_region() {
-  local v4 v6
+  local v4 v6 geo region isp
   v4=$(curl -s --max-time 6 https://api.ipify.org || true)
   if [[ -n "$v4" ]]; then
-    echo "IPv4 $v4 | $(_core_ipwho_query "$v4")"
+    geo=$(_core_ipwho_query "$v4")
+    region=${geo%%$'\n'*}
+    isp=${geo#*$'\n'}
+    echo "IPv4 $v4"
+    echo "地区: ${region:-未知/未知}"
+    echo "运营商: ${isp:-未知}"
   else
     echo "IPv4 不支持（本机无公网 IPv4）"
   fi
@@ -146,9 +150,16 @@ core_detect_ip_region() {
   if _core_has_ipv6; then
     v6=$(_core_probe_v6)
     if [[ -n "$v6" ]]; then
-      echo "IPv6 $v6 | $(_core_ipwho_query "$v6")"
+      geo=$(_core_ipwho_query "$v6")
+      region=${geo%%$'\n'*}
+      isp=${geo#*$'\n'}
+      echo "IPv6 $v6"
+      echo "地区: ${region:-未知/未知}"
+      echo "运营商: ${isp:-未知}"
     else
-      echo "IPv6 探测失败（本机存在 IPv6 地址，但无法访问公网 IPv6——检查宿主/上游 IPv6 路由、NAT66 或安全组）"
+      echo "IPv6 探测失败"
+      echo "原因: 本机有 IPv6 地址，但无法访问公网 IPv6"
+      echo "请检查宿主/上游 IPv6 路由、NAT66 或安全组"
     fi
   else
     echo "IPv6 不支持（本机无公网 IPv6）"
