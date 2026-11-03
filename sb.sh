@@ -5,6 +5,53 @@
 # 无法据此 cd）。改为判断“当前工作目录是否就是仓库”，否则下载后运行。
 set -euo pipefail
 
+# 普通文件入口通过 sudo 重启原脚本。进程替换入口（/dev/fd/*）不能传给 sudo，
+# 因此改为下载同一分支的真实脚本文件，再请求提权运行。
+if [[ $EUID -ne 0 ]]; then
+  _elevate_source=${BASH_SOURCE[0]}
+  _elevate_dir=""
+  if [[ ! -f "$_elevate_source" || "$_elevate_source" == /dev/fd/* ]]; then
+    _elevate_dir=$(mktemp -d)
+    _elevate_source="$_elevate_dir/sb.sh"
+    _elevate_url="https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh"
+    if command -v curl >/dev/null 2>&1; then
+      if ! curl -fsSL "$_elevate_url" -o "$_elevate_source"; then
+        rm -rf "$_elevate_dir"
+        echo "[ERR ] 无法下载可提权执行的引导脚本，请检查网络或手动使用 sudo。" >&2
+        exit 1
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if ! wget -qO "$_elevate_source" "$_elevate_url"; then
+        rm -rf "$_elevate_dir"
+        echo "[ERR ] 无法下载可提权执行的引导脚本，请检查网络或手动使用 sudo。" >&2
+        exit 1
+      fi
+    else
+      rm -rf "$_elevate_dir"
+      echo "[ERR ] 需要 curl 或 wget 才能自动请求提权。" >&2
+      exit 1
+    fi
+    if [[ ! -s "$_elevate_source" ]]; then
+      rm -rf "$_elevate_dir"
+      echo "[ERR ] 无法下载可提权执行的引导脚本，请检查网络或手动使用 sudo。" >&2
+      exit 1
+    fi
+  fi
+  echo "==> 需要管理员权限，正在请求提权..."
+  _elevate_rc=0
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -- bash "$_elevate_source" "$@" || _elevate_rc=$?
+  elif command -v su >/dev/null 2>&1; then
+    printf -v _elevate_cmd '%q ' bash "$_elevate_source" "$@"
+    su -s /bin/bash -c "$_elevate_cmd" || _elevate_rc=$?
+  else
+    echo "[ERR ] 找不到 sudo 或 su，无法自动获取 root 权限。" >&2
+    _elevate_rc=1
+  fi
+  [[ -z "$_elevate_dir" ]] || rm -rf "$_elevate_dir"
+  exit "$_elevate_rc"
+fi
+
 REPO="yunjianj/Easy-Singbox"
 BRANCH="main"
 

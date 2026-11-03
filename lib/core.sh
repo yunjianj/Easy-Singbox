@@ -21,6 +21,23 @@ ok()    { printf '%s[ OK ]%s %s\n'  "$C_GRN" "$C_RST" "$*"; }
 warn()  { printf '%s[WARN]%s %s\n'  "$C_YEL" "$C_RST" "$*"; }
 error() { printf '%s[ERR ]%s %s\n'  "$C_RED" "$C_RST" "$*" >&2; }
 
+# 以 root 重新执行入口，保留所有参数；sudo 会按系统策略提示当前用户输入密码。
+# 没有 sudo 时用 su 请求 root 密码。调用方传入真实脚本路径，避免依赖当前目录。
+core_exec_root() {
+  local script=$1 quoted
+  shift
+  [[ $EUID -eq 0 ]] && return 0
+  printf '需要管理员权限，正在请求提权...\n'
+  if command -v sudo >/dev/null 2>&1; then
+    exec sudo -- bash "$script" "$@"
+  elif command -v su >/dev/null 2>&1; then
+    printf -v quoted '%q ' bash "$script" "$@"
+    exec su -s /bin/bash -c "$quoted"
+  fi
+  error "找不到 sudo 或 su，无法自动获取 root 权限。"
+  return 1
+}
+
 # ---------- 全局路径 ----------
 SB_BIN="/usr/local/bin/sing-box"
 SB_DIR_CONF="/etc/sing-box"
@@ -36,7 +53,7 @@ ACME_HOME="$HOME/.acme.sh"
 # ---------- 运行环境 ----------
 core_root_check() {
   if [[ $EUID -ne 0 ]]; then
-    error "本脚本必须以 root 身份运行（当前 EUID=$EUID）。请使用 sudo 或切换至 root 后重试。"
+    error "当前操作需要 root 权限（EUID=$EUID）。请确认 sudo 或 su 可用后重新启动入口脚本。"
     exit 1
   fi
 }

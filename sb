@@ -38,6 +38,11 @@ source "$SB_DIR/lib/node.sh"
 source "$SB_DIR/lib/diag.sh"
 source "$SB_DIR/lib/bbrfq.sh"
 
+# 管理命令需要 root。普通用户启动时自动请求 sudo/su，再以 root 重进同一入口。
+if [[ $EUID -ne 0 ]]; then
+  core_exec_root "$SB_DIR/sb" "$@" || exit $?
+fi
+
 # ---------- sing-box 下载/安装 ----------
 # 获取本脚本适配的基线大版本（SB_VER_BASE）下最新的 patch 版本号（如 1.14.3）。
 # 从 GitHub Releases 列表过滤 v<base>.* 前缀的最新 tag；无网络/API 失败返回非零。

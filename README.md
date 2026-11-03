@@ -4,7 +4,7 @@
 
 ## 一键安装
 
-以 root 在目标服务器执行以下任一命令，自动下载并进入安装主页面：
+以普通用户执行以下任一命令，脚本会自动请求管理员权限（通过 `sudo` 输入当前用户密码；没有 `sudo` 时尝试 `su` 输入 root 密码），然后下载并进入安装主页面。无需在 `sudo` 后使用进程替换：
 
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/yunjianj/Easy-Singbox/main/sb.sh)
