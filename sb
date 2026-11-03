@@ -690,7 +690,7 @@ sb_show_menu() {
   echo " BBR / FQ  : $bbr"
   echo " IP / 地区 : "
   while IFS= read -r line; do
-    [[ -n "$line" ]] && echo " $line"
+    [[ -n "$line" ]] && echo "             $line"
   done <<< "$ipregion"
   # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
   if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
