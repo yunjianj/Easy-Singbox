@@ -692,9 +692,7 @@ sb_show_menu() {
   while IFS= read -r line; do
     [[ -n "$line" ]] && echo "             $line"
   done <<< "$ipregion"
-  echo " Sing-Box  : $inst / $running"
-  echo " 内核版本  : v$ver"
-  echo " 协议在线  : $proto"
+  echo " Sing-Box  : $inst / $running  v$ver  ($proto 协议在线)"
   # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
   if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
