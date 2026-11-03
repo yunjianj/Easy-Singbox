@@ -8,10 +8,11 @@
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
   C_RED=$(tput setaf 1 2>/dev/null || true); C_GRN=$(tput setaf 2 2>/dev/null || true)
   C_YEL=$(tput setaf 3 2>/dev/null || true); C_BLU=$(tput setaf 4 2>/dev/null || true)
+  C_PNK=$(tput setaf 5 2>/dev/null || true)
   C_CYN=$(tput setaf 6 2>/dev/null || true); C_BOLD=$(tput bold 2>/dev/null || true)
   C_RST=$(tput sgr0 2>/dev/null || true)
 else
-  C_RED=""; C_GRN=""; C_YEL=""; C_BLU=""; C_CYN=""; C_BOLD=""; C_RST=""
+  C_RED=""; C_GRN=""; C_YEL=""; C_BLU=""; C_PNK=""; C_CYN=""; C_BOLD=""; C_RST=""
 fi
 
 # ---------- 日志 ----------

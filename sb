@@ -698,14 +698,16 @@ sb_show_menu() {
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
     echo -e "             ${C_RED}[内核版本过低：本脚本需 sing-box ${SB_VER_BASE}.x，请执行选项 7 升级]${C_RST}"
   elif [[ "$kstat" == update:* ]]; then
-    # 同基线但有新补丁：绿色提示（仅提示，不自动升级；升级仍走选项 7 手动确认）。
+    # 同基线但有新补丁：粉色提示（仅提示，不自动升级；升级仍走选项 7 手动确认）。
     # 低于基线时上面红字已覆盖，不再重复提示。
     local kv="${kstat#update:}"
-    echo -e "             ${C_GRN}[发现新内核 v${kv}，可执行选项 7 升级]${C_RST}"
+    echo -e "             ${C_PNK}[发现新内核 v${kv}，可执行选项 7 升级]${C_RST}"
+  elif [[ "$kstat" == latest ]]; then
+    echo -e "             ${C_GRN}[内核已是最新]${C_RST}"
   fi
   case "$vstat" in
     latest)   echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[已是最新]${C_RST}" ;;
-    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_GRN}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
+    update:*) local nv="${vstat#update:}"; echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_PNK}[发现新版本 v${nv}，可执行选项 8 更新]${C_RST}" ;;
     *)        echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_YEL}[远程版本未知，请检查网络]${C_RST}" ;;
   esac
   echo "--------------------------------------------------------------"
