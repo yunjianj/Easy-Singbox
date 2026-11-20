@@ -8,7 +8,7 @@ service_write_unit() {
     service_write_openrc_unit
     return
   fi
-  cat > "$SB_SERVICE" <<'EOF'
+  cat > "$SB_SERVICE" <<EOF
 [Unit]
 Description=sing-box service
 After=network.target nss-lookup.target
@@ -16,8 +16,8 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStartPre=/usr/local/bin/sing-box check -c /etc/sing-box/config.json
-ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecStartPre=$SB_BIN check -c /etc/sing-box/config.json
+ExecStart=$SB_BIN run -c /etc/sing-box/config.json
 Restart=always
 RestartSec=5
 LimitNOFILE=100000
@@ -142,6 +142,29 @@ service_install() {
     systemctl daemon-reload
     systemctl enable sing-box
   fi
+}
+
+service_switch_arch_kernel() {
+  local backup was_running=0
+  local SB_BIN="$SB_PACMAN_BIN"
+  "$SB_BIN" check -c "$SB_CONF" || return 1
+  backup=$(mktemp "${SB_SERVICE}.XXXXXX") || return 1
+  if ! cp -p "$SB_SERVICE" "$backup"; then
+    rm -f "$backup"
+    return 1
+  fi
+  service_is_active && was_running=1
+  if service_write_unit && systemctl daemon-reload &&
+     { (( ! was_running )) || { systemctl restart sing-box && service_is_active; }; }; then
+    rm -f "$backup"
+    (( ! was_running )) || hop_reapply || true
+    return 0
+  fi
+  mv -f "$backup" "$SB_SERVICE" || return 1
+  systemctl daemon-reload
+  (( ! was_running )) || systemctl restart sing-box
+  error "切换到 pacman 内核失败，已恢复原服务单元"
+  return 1
 }
 
 service_start() {

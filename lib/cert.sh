@@ -2,6 +2,49 @@
 # lib/cert.sh — 证书管理（acme.sh 自动申请 Let's Encrypt）
 # 仅支持脚本自动申请，不支持手动上传。HTTP-01 / DNS-01(Cloudflare)。
 
+ACME_BIN="$ACME_HOME/acme.sh"
+ACME_ARCH_CRON="/etc/cron.d/easy-singbox-acme"
+if core_is_arch; then
+  ACME_BIN="/usr/bin/acme.sh"
+fi
+
+cert_acme() {
+  if core_is_arch; then
+    ACME_PACKAGED=1 "$ACME_BIN" --home "$ACME_HOME" "$@"
+  else
+    "$ACME_BIN" "$@"
+  fi
+}
+
+cert_install_arch_acme() {
+  local packages=() jobs
+  [[ -x "$ACME_BIN" ]] || packages+=(acme.sh)
+  command -v openssl >/dev/null 2>&1 || packages+=(openssl)
+  command -v socat >/dev/null 2>&1 || packages+=(socat)
+  pacman -Q cronie >/dev/null 2>&1 || packages+=(cronie)
+  if (( ${#packages[@]} )); then
+    core_pacman_install "${packages[@]}" || return 1
+  fi
+  if [[ ! -x "$ACME_BIN" ]]; then
+    error "找不到 $ACME_BIN，请执行 sudo pacman -S acme.sh 修复软件包"
+    return 1
+  fi
+  if ! systemctl is-active --quiet cronie && ! systemctl enable --now cronie; then
+    warn "cron 服务未运行，acme.sh 证书无法自动续期"
+    return 1
+  fi
+  mkdir -p "$ACME_HOME" || return 1
+  printf '21 3 * * * root ACME_PACKAGED=1 "%s" --cron --home "%s" > /dev/null\n' \
+    "$ACME_BIN" "$ACME_HOME" > "$ACME_ARCH_CRON" || return 1
+  chmod 644 "$ACME_ARCH_CRON" || return 1
+  # 只移除旧版在 root crontab 中生成的续期任务。
+  if jobs=$(crontab -l 2>/dev/null) &&
+     [[ "$jobs" == *"\"$ACME_HOME\"/acme.sh --cron"* ]]; then
+    awk -v old="\"$ACME_HOME\"/acme.sh --cron" '!index($0, old)' <<< "$jobs" | crontab - || return 1
+  fi
+  ok "acme.sh 已由 pacman 管理，证书自动续期已配置"
+}
+
 # 安装 acme.sh（幂等）
 # 供应链防护：不再 `curl ... | sh` 盲执行远程脚本，改为“先落盘、再校验、后执行”。
 # 校验项：文件非空 + 首行 sh shebang。安装源按可达性依次尝试：
@@ -10,7 +53,11 @@
 # 关键：最终以 $ACME_HOME/acme.sh 真实存在为准，绝不轻信中间命令的退出码
 # （get.acme.sh 在网络不可达时可能退出 0 但未真正安装）。
 cert_install_acme() {
-  if [[ -x "$ACME_HOME/acme.sh" ]]; then
+  if core_is_arch; then
+    cert_install_arch_acme
+    return
+  fi
+  if [[ -x "$ACME_BIN" ]]; then
     ok "acme.sh 已安装 ($ACME_HOME/acme.sh)"
     return 0
   fi
@@ -123,14 +170,14 @@ cert_install_acme() {
   if [[ -n "$src" ]] && head -1 "$src" | grep -qE '^#!.*sh'; then
     chmod +x "$src"
     (cd "$(dirname "$src")" && ./acme.sh --install $install_args >/dev/null 2>&1) || true
-    if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
+    if [[ ! -x "$ACME_BIN" ]]; then
       warn "acme.sh 源码已下载（方式一/二/三），但自安装失败（Pre-check 或运行报错被静默）。"
       warn "可在 $(dirname "$src") 下手动执行 ./acme.sh --install 查看真实报错"
     fi
   fi
 
   # 方式四（兜底）：get.acme.sh 安装脚本，同样先落盘校验，并要求用户确认
-  if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
+  if [[ ! -x "$ACME_BIN" ]]; then
     warn "自动安装未成功（下载或安装环节失败），改用 get.acme.sh 安装脚本（已先落盘校验，非管道直执行）"
     if core_prompt_yn "确认继续安装 acme.sh？"; then
       if curl -fsSL --retry 3 --max-time 60 -o "$tmp/acme-install.sh" "https://get.acme.sh" \
@@ -143,12 +190,12 @@ cert_install_acme() {
 
   rm -rf "$tmp"
   # 最终判定以文件真实存在为准
-  if [[ ! -x "$ACME_HOME/acme.sh" ]]; then
+  if [[ ! -x "$ACME_BIN" ]]; then
     error "acme.sh 安装失败：$ACME_HOME/acme.sh 不存在。请检查到 github.com 的网络、以及系统是否安装了 cron/crontab（acme.sh 安装前会 Pre-check）"
     return 1
   fi
   # 注册默认 CA 为 Let's Encrypt
-  "$ACME_HOME/acme.sh" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+  cert_acme --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
   ok "acme.sh 安装完成"
 }
 
@@ -163,7 +210,7 @@ cert_install_files() {
   else
     reload_cmd="systemctl is-enabled sing-box >/dev/null 2>&1 && systemctl reload sing-box || true"
   fi
-  "$ACME_HOME/acme.sh" --install-cert -d "$domain" \
+  cert_acme --install-cert -d "$domain" \
     --key-file      "$SB_DIR_SSL/privkey.pem" \
     --fullchain-file "$SB_DIR_SSL/fullchain.pem" \
     --reloadcmd "$reload_cmd" --ecc
@@ -197,7 +244,7 @@ cert_has_valid() {
 # HTTP-01 签发（standalone 需要 80 空闲）。参数：domain [force]；force=1 时强制重签。
 cert_issue_http01() {
   local domain=$1 force=${2:-0}
-  [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
+  [[ -x "$ACME_BIN" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
   mkdir -p "$SB_DIR_SSL"
   # 重装场景：非 force 且 acme.sh 已持有同域名有效证书时直接复用，
   # 避免 --issue 因 "Domains not changed. Skipping." 跳过而被误判失败
@@ -213,7 +260,7 @@ cert_issue_http01() {
   info "HTTP-01 签发中（需 80 端口对外可达）: $domain"
   local args=(--issue -d "$domain" --standalone --keylength ec-256 --server letsencrypt --accountemail no@eff.org)
   [[ "$force" == "1" ]] && args+=(--force)
-  if ! "$ACME_HOME/acme.sh" "${args[@]}"; then
+  if ! cert_acme "${args[@]}"; then
     fw_close_http_temp
     error "HTTP-01 签发失败：请确认域名 A 记录指向本机且 80 端口对外可达"
     return 1
@@ -233,7 +280,7 @@ cert_save_cf_token() {
 # DNS-01(Cloudflare) 签发（无需 80）。参数：domain token [force]；force=1 时强制重签。
 cert_issue_dns01_cf() {
   local domain=$1 token=$2 force=${3:-0}
-  [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
+  [[ -x "$ACME_BIN" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
   mkdir -p "$SB_DIR_SSL"
   export CF_Token="$token"
   # 重装场景：非 force 且已持有同域名有效证书时复用（避免 --issue 跳过被误判失败）
@@ -248,7 +295,7 @@ cert_issue_dns01_cf() {
   info "DNS-01(Cloudflare) 签发中: $domain"
   local args=(--issue -d "$domain" --dns dns_cf --keylength ec-256 --server letsencrypt --accountemail no@eff.org)
   [[ "$force" == "1" ]] && args+=(--force)
-  if ! "$ACME_HOME/acme.sh" "${args[@]}"; then
+  if ! cert_acme "${args[@]}"; then
     unset CF_Token
     error "DNS-01 签发失败：请检查 Cloudflare API Token 是否正确且具有 Zone:DNS 编辑权限"
     return 1
@@ -263,7 +310,7 @@ cert_issue_dns01_cf() {
 # 参数：domain [force]；返回 0=签发成功，1=用户取消（留空）或 acme.sh 缺失。
 cert_issue_dns01_cf_retry() {
   local domain=$1 force=${2:-0} token
-  [[ -x "$ACME_HOME/acme.sh" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
+  [[ -x "$ACME_BIN" ]] || { error "acme.sh 未安装，请先完成安装（重新执行 sb 安装流程）"; return 1; }
   while :; do
     token=$(core_prompt "Cloudflare API Token（留空取消）")
     if [[ -z "$token" ]]; then
@@ -280,7 +327,7 @@ cert_issue_dns01_cf_retry() {
 # 续期（依赖 acme.sh cron；签发时已写入 reloadcmd）
 cert_renew() {
   [[ -r "$SB_CF_ENV" ]] && set -a && . "$SB_CF_ENV" && set +a
-  "$ACME_HOME/acme.sh" --renew-all --ecc || "$ACME_HOME/acme.sh" --cron
+  cert_acme --renew-all --ecc || cert_acme --cron
   if [[ "$INIT_SYSTEM" == "openrc" ]]; then
     ok "续期检查完成（acme.sh cron 会自动续期，reloadcmd 指向 rc-service sing-box restart）"
   else
@@ -296,7 +343,9 @@ cert_change() {
     return 1
   fi
   # acme.sh 缺失时先安装（如上次安装 acme.sh 失败但仍继续的场景）
-  [[ -x "$ACME_HOME/acme.sh" ]] || { cert_install_acme || return 1; }
+  if core_is_arch || [[ ! -x "$ACME_BIN" ]]; then
+    cert_install_acme || return 1
+  fi
   [[ -f "$SB_STATE" ]] && set -a && . "$SB_STATE" && set +a
   domain=$(core_prompt "证书域名" "${DOMAIN:-}")
   # 输入校验（安全要求）：仅允许域名合法字符，拒绝 /、&、\、空格、换行等，

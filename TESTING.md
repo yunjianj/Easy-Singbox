@@ -67,7 +67,7 @@ openssl s_client -connect <DOMAIN>:<PORT_HY2> -servername <DOMAIN> </dev/null 2>
 
 - [ ] 临时调短 acme.sh 续期间隔或手动 `acme.sh --renew-all`，确认 reloadcmd 执行 `systemctl reload sing-box` 且服务不中断
 
-## 8. 内核升级与版本支持检测
+## 8. 内核升级与版本支持检测（非 Arch Linux）
 
 - [ ] 主面板 Sing-Box 行显示已装内核版本，且为 1.14.x（基线达标无红字）
 - [ ] 选项 7 显示"已是最新版本，无需升级"（当前为 1.14.x 最新时）
@@ -97,6 +97,15 @@ sed -i -e '/^PROTOS=/d' -e '/^PORT_SOCKS=/d' -e '/^USER_SOCKS=/d' -e '/^PASS_SOC
 - [ ] 推断的协议集与升级前一致（**不会凭空多出 SOCKS5**）；`grep '^PROTOS=' /etc/sing-box/.state` 已被回写
 - [ ] `nodes.txt` 每个 URI 的端口与 `config.json` 对应 inbound 的 `listen_port` 一致
 - [ ] 还原：`cp /root/state.bak /etc/sing-box/.state && cp /root/config.bak /etc/sing-box/config.json && sb`（选项 6 重载）
+
+## 8c. Arch Linux 软件包管理
+
+- [ ] 在已执行 `sudo pacman -Syu` 的 Arch Linux 上选 1，完成安装。确认 `pacman -Qo /usr/bin/sing-box /usr/bin/acme.sh` 报告软件包归属，脚本单元的 `ExecStart` 使用 `/usr/bin/sing-box`。
+- [ ] 分别验证干净安装和预装 sing-box 软件包后选 1 的流程。首次安装完成前取消并重试时，选项 1 仍可继续安装。
+- [ ] 检查 `cronie.service` 和 `/etc/cron.d/easy-singbox-acme`，确认证书续期使用软件包提供的 acme.sh，HTTP-01 所需的 socat 也由 pacman 提供。
+- [ ] 选项 7 显示 `sudo pacman -Syu`，面板不查询 GitHub Releases 的内核版本；选项 8 仍可更新脚本。
+- [ ] 在有旧版 GitHub 内核和 `.state` 的机器上选 1 迁移，确认节点、证书和原服务启停状态保留，旧内核备份可找到。
+- [ ] 迁移后选 1 卸载，确认 pacman 已移除 sing-box 软件包，用户选择删除证书时同时移除续期任务。
 
 ## 9. 卸载
 

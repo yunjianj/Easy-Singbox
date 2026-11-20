@@ -39,7 +39,18 @@ core_exec_root() {
 }
 
 # ---------- 全局路径 ----------
-SB_BIN="/usr/local/bin/sing-box"
+SB_LOCAL_BIN="/usr/local/bin/sing-box"
+SB_PACMAN_BIN="/usr/bin/sing-box"
+SB_BIN="$SB_LOCAL_BIN"
+core_is_arch() (
+  [[ -r /etc/os-release ]] || return 1
+  local ID=""
+  . /etc/os-release
+  [[ "$ID" == arch ]]
+)
+if core_is_arch && [[ ! -x "$SB_LOCAL_BIN" ]]; then
+  SB_BIN="$SB_PACMAN_BIN"
+fi
 SB_DIR_CONF="/etc/sing-box"
 SB_CONF="$SB_DIR_CONF/config.json"
 SB_DIR_SSL="$SB_DIR_CONF/ssl"
@@ -63,7 +74,7 @@ core_detect_os() {
   if [[ -r /etc/os-release ]]; then
     # shellcheck disable=SC1091
     . /etc/os-release
-    echo "${PRETTY_NAME:-$NAME $VERSION_ID}"
+    echo "${PRETTY_NAME:-${NAME:-unknown} ${VERSION_ID:-}}"
   else
     echo "unknown"
   fi
@@ -203,9 +214,47 @@ core_ver_ge() {
 # ---------- 协议编号与内核基线 ----------
 # 本脚本适配的 sing-box 内核**基线大版本**（只考虑大版本，如 1.14）。
 # 约定（v1.5.0 起）：所有协议一律只按此大版本的最新内核语法编写/适配，
-# 不再支持多版本语法分支；安装/升级时只下载该大版本下的最新 patch。
+# 不再支持多版本语法分支；Arch 由 pacman 管理，其余系统只下载该大版本下的最新 patch。
 # 升级适配新的大版本内核时，同步修改此常量并重新验证全部协议配置语法。
 SB_VER_BASE="1.14"
+
+core_pacman_install() {
+  # 使用已同步的数据库，系统升级由用户通过 pacman -Syu 执行。
+  if ! pacman -S --needed "$@"; then
+    error "pacman 安装失败，请执行 sudo pacman -Syu 后重试"
+    return 1
+  fi
+}
+
+core_install_arch_kernel() (
+  local version upstream backup
+  if ! pacman -Q sing-box >/dev/null 2>&1; then
+    version=$(pacman -Sp --print-format '%n %v' sing-box | awk '$1 == "sing-box" { print $2 }') || version=""
+    upstream=${version#*:}
+    upstream=${upstream%-*}
+    if [[ "$upstream" != "$SB_VER_BASE".* && "$upstream" != "$SB_VER_BASE" ]]; then
+      error "pacman 仓库没有兼容的 sing-box ${SB_VER_BASE}.x（当前：${version:-未知}）。请检查软件源和版本"
+      return 1
+    fi
+    if [[ -e "$SB_CONF" ]]; then
+      backup=$(mktemp -d "$SB_DIR_CONF/.arch-install.XXXXXX") || return 1
+      trap 'if [[ -e "$backup/config.json" ]]; then mv -f "$backup/config.json" "$SB_CONF" || exit 1; fi; rmdir "$backup"' EXIT
+      # 首次安装的软件包也提供 config.json，安装完成后恢复现有配置。
+      mv "$SB_CONF" "$backup/config.json" || return 1
+    fi
+    core_pacman_install sing-box || return 1
+  fi
+  if [[ ! -x "$SB_PACMAN_BIN" ]]; then
+    error "找不到 $SB_PACMAN_BIN，请执行 sudo pacman -S sing-box 修复软件包"
+    return 1
+  fi
+  local SB_BIN="$SB_PACMAN_BIN"
+  version=$(core_sb_ver) || version=""
+  if [[ "$version" != "$SB_VER_BASE".* && "$version" != "$SB_VER_BASE" ]]; then
+    error "当前 pacman 内核 ${version:-未知}，需要 sing-box ${SB_VER_BASE}.x"
+    return 1
+  fi
+)
 
 # 当前脚本支持的全部协议编号（按字母序给出），供默认启用与遍历用。
 core_all_protos() {
@@ -636,7 +685,10 @@ core_ensure_deps() {
   [[ ${#missing[@]} -eq 0 ]] && return 0
 
   info "检测到缺失依赖: ${missing[*]}，正在安装..."
-  if command -v apk >/dev/null 2>&1; then
+  if core_is_arch; then
+    # Arch 与 Debian 的这组依赖使用相同的软件包名。
+    core_pacman_install $apt_pkgs || true
+  elif command -v apk >/dev/null 2>&1; then
     # 逐个安装而非整批：apk 是原子操作，一批包里只要有一个不存在（Alpine 各
     # 分支包名差异大，如 iptables / iproute2-ss）就会导致整批失败，连能装的
     # 包也一起装不上——这正是 Alpine 上"依赖安装失败"的常见根因。

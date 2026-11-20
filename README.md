@@ -35,6 +35,7 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 ## 支持系统
 
 - Debian 11/12、Ubuntu 20.04/22.04/24.04 等 systemd 发行版（x86_64 / aarch64）
+- **Arch Linux**（systemd，启用 `extra` 仓库）
 - **Alpine Linux 3.19+**（OpenRC init，v1.2.0 起支持，x86_64 / aarch64；容器环境内的 Alpine 不支持，因容器通常不运行 init 系统）
 - 防火墙**不做任何自动配置**，端口由用户自行放行（v1.6.0 起；HTTP-01 签发期临时放行 80 除外）。诊断功能会只读探测 `ufw → firewalld → iptables` 后端并展示现状
 
@@ -46,10 +47,11 @@ git clone https://github.com/yunjianj/Easy-Singbox.git && cd Easy-Singbox && bas
 > `ss` 缺失时端口监听校验自动改用 `/proc/net` 直读回退（零依赖），`iptables` 缺失时端口跳跃不启用。
 > Alpine 3.21+ 的 `ss` 位于独立子包 `iproute2-ss`，脚本会自动补装；手动安装可用 `apk add iproute2 iproute2-ss`。
 
-- `sing-box`（从 GitHub Releases 下载，**只适配 1.14.x 内核**（v1.5.0 起单一基线；安装/升级自动取 1.14 大版本下最新补丁，不再支持手动切换其它大版本），下载后比对 GitHub Release API 官方 digest（sha256），校验失败即拒绝安装）
-- **内核基线（v1.5.0 起）**：本脚本只适配 sing-box **1.14.x**（`SB_VER_BASE=1.14`）。所有协议一律按该大版本的最新稳定内核语法编写，**无多版本语法分支、无按版本裁剪协议**。主面板会做版本支持检测：已装内核低于 1.14 时红字提示，执行选项 7 一键升级到 1.14.x 最新即可。历史上 1.13/1.14 双分支（v1.3.0）、大版本切换自动重建（v1.3.1）、按版本裁剪协议（v1.3.3）等机制已随 v1.5.0 移除。详见 `AGENTS.md`。
+- `sing-box`（Arch Linux 由 pacman 安装和校验。其他系统从 GitHub Releases 下载，下载后比对 GitHub Release API 官方 digest（SHA256））
+- **内核基线**：本脚本适配 sing-box **1.14.x**（`SB_VER_BASE=1.14`），所有协议使用这一基线的配置语法。其他系统的选项 7 会升级至基线的最新补丁。
 - `acme.sh`（证书申请，先落盘校验 shebang 再执行，不再 `curl | sh` 盲执行）
 - `ncurses`（可选，提供 `tput` 彩色输出；缺失时静默降级为无色，不影响功能。Alpine 上安装：`apk add ncurses`）
+- **Arch Linux**：首次安装前请执行 `sudo pacman -Syu`。脚本通过 pacman 安装 `sing-box` 和缺少的依赖，包括 `curl`、`openssl`、`iproute2`、`iptables`、`acme.sh`、`socat` 和 `cronie`。已有 easy-singbox 安装的旧内核可通过选项 1 迁移，保留节点配置和证书。
 
 ## 协议（安装/变更时可自选）
 
@@ -110,7 +112,7 @@ sb
 
 ```
 ==============================================================
-      easy-singbox  管理面板  v1.6.5
+      easy-singbox  管理面板  v1.6.6
 --------------------------------------------------------------
  系统      : Debian 12 (Bookworm) x86_64
  指令集    : amd64 (AES-NI: 支持)
@@ -121,7 +123,7 @@ sb
              IPv6 2001:db8::1  |  日本/东京 / 某ISP
  Sing-Box  : 已运行  v1.14.0  (2 协议在线)
              [内核 1.14.x 已达标]
- 脚本版本  : v1.6.5  [已是最新]
+ 脚本版本  : v1.6.6  [已是最新]
 --------------------------------------------------------------
  [1] 一键安装 / 卸载 Sing-Box
  [2] 变更代理配置      (协议 / 端口 / 凭证)
@@ -130,7 +132,7 @@ sb
  [5] 停止 Sing-Box
  [6] 重启 / 查看节点
  [7] 升级内核版本        (适配 sing-box 1.14.x，升到最新补丁)
- [8] 更新脚本            (当前 v1.6.5)
+ [8] 更新脚本            (当前 v1.6.6)
  [9] 诊断与日志        (排查节点不通，生成可发送的报告)
  [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)
  [11] 一键关闭防火墙      (开放所有端口；本脚本不再自动配置防火墙)
@@ -175,7 +177,7 @@ sb log        # 直接查看最近 200 行服务日志
 ## 卸载与更新
 
 - **卸载**：主页面选项 1（已安装时变为卸载），或独立执行 `bash uninstall.sh`。会二次确认是否一并删除证书目录与 acme.sh 账户。
-- **升级内核（选项 7，v1.5.0 起仅升级、不可手动切换/降级）**：脚本只适配 1.14.x，选项 7 自动下载该大版本最新补丁，下载前备份当前二进制（`/usr/local/bin/sing-box.bak`），失败可手动恢复。下载的二进制强制比对 GitHub Release API 的官方 asset digest（sha256；该 release 本身不附带 `checksums.sha256`），校验失败打印期望/实际哈希并拒绝安装。升级成功后按基线语法重建存量配置并刷新节点。
+- **升级内核（选项 7）**：Arch Linux 上会提示运行 `sudo pacman -Syu`，更新后可选 6 重启服务。其他系统的选项 7 自动下载该大版本最新补丁，下载前备份当前二进制（`/usr/local/bin/sing-box.bak`），失败可手动恢复。下载的二进制强制比对 GitHub Release API 的官方 asset digest（sha256；该 release 本身不附带 `checksums.sha256`），校验失败打印期望/实际哈希并拒绝安装。升级成功后按基线语法重建存量配置并刷新节点。
 - **更新脚本**：选项 8，从 GitHub raw 官方源（`sb` 顶部 `SB_UPDATE_BASE`）拉取最新代码，保留本机 `/etc/sing-box/config.json` 与证书。覆盖本地前会先用 `cmp -s` 列出所有变更文件并要求确认，拒绝则本地不被改动。
 - **版本自检**：主面板标题与「脚本版本」行显示当前版本（`sb` 内 `SB_SCRIPT_VERSION` 常量），并自动对比仓库根 `VERSION` 文件——已最新显示绿色 `[已是最新]`，有新版本显示红色 `[发现新版本 vX，可执行选项 8 更新]`，检测失败（网络受限）显示黄色 `[远程版本未知]`。检测结果本地缓存 10 分钟，不会拖慢菜单。发布新版本时请同步修改 `SB_SCRIPT_VERSION` 与 `VERSION` 文件。
 
@@ -183,7 +185,7 @@ sb log        # 直接查看最近 200 行服务日志
 
 **供应链完整性（v1.1.2）**
 
-- **sing-box 二进制**：每次下载（安装/切换内核版本）都会比对 **GitHub Release API 官方 asset digest（sha256）**——GitHub 为每个资产签发的 digest 无法伪造，比"与二进制同 release 的 checksums 文件"更强（sing-box 官方也未附带该文件）。校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件；API 不可用或缺失 `sha256sum`/`shasum` 时显著警告并要求显式确认，绝不静默跳过。
+- **sing-box 二进制**：Arch Linux 由 pacman 验证软件包。其他系统每次下载（安装/切换内核版本）都会比对 **GitHub Release API 官方 asset digest（sha256）**——GitHub 为每个资产签发的 digest 无法伪造，比"与二进制同 release 的 checksums 文件"更强（sing-box 官方也未附带该文件）。校验失败打印期望/实际 SHA256 并拒绝安装、清理临时文件；API 不可用或缺失 `sha256sum`/`shasum` 时显著警告并要求显式确认，绝不静默跳过。
 - **脚本自更新**：更新源固定为 GitHub raw 官方域名（`SB_UPDATE_BASE`），覆盖本地前列出变更文件并要求确认；拒绝则本地不被改动。
 - **acme.sh 安装**：不再 `curl | sh` 盲执行，改为 git clone 官方仓库或下载官方 master 单文件，先落盘、校验非空与 shebang，再本地执行；兜底 `get.acme.sh` 同样先落盘校验并要求确认。
 - **引导脚本 sb.sh**：解压后校验 `install.sh` shebang 及 `sb`/`lib/*.sh` 齐套，不完整即中止。

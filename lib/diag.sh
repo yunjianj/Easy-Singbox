@@ -118,7 +118,9 @@ diag_collect() {
       # ss 缺失时不再直接放弃核对：core_listening_ports 已内置 /proc/net 回退，
       # 仅在回退也拿不到任何端口时才提示安装（避免把"无法探测"误报为"未监听"）
       if ! command -v ss >/dev/null 2>&1 && [[ -z "$(core_listening_ports)" ]]; then
-        if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+        if core_is_arch; then
+          echo "未安装 ss 且 /proc/net 不可用，无法核对监听状态；请先安装：sudo pacman -S iproute2"
+        elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
           echo "未安装 ss 且 /proc/net 不可用，无法核对监听状态；请先安装：apk add iproute2 iproute2-ss"
         else
           echo "未安装 ss 且 /proc/net 不可用，无法核对监听状态；请先安装：apt install iproute2 / yum install iproute"

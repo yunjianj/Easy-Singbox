@@ -100,7 +100,9 @@ hop_ensure_backend() {
     return 0
   fi
   info "系统缺少 iptables/nftables（端口跳跃需要），尝试安装..."
-  if command -v apk >/dev/null 2>&1; then
+  if core_is_arch; then
+    core_pacman_install iptables || true
+  elif command -v apk >/dev/null 2>&1; then
     apk add --no-cache iptables ip6tables >/dev/null 2>&1 || apk add --no-cache iptables >/dev/null 2>&1 || apk add --no-cache nftables >/dev/null 2>&1 || true
   elif command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq >/dev/null 2>&1 || true

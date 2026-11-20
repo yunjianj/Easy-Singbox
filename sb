@@ -12,7 +12,7 @@ umask 077
 SB_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # 脚本版本（发布新版本时同步修改此常量，并更新仓库根 VERSION 文件）
-SB_SCRIPT_VERSION="1.6.5"
+SB_SCRIPT_VERSION="1.6.6"
 
 # 远程版本检测缓存（best-effort，避免每次打开菜单都请求网络）
 SB_VER_CACHE="$SB_DIR/.script_ver"
@@ -211,6 +211,7 @@ sb_script_version_status() {
 # 且主面板每次渲染都会调一次，TTL 太短等于每次开菜单都联网。
 sb_kernel_version_status() {
   local cur=$1 now cached_ts cached_ver r=""
+  core_is_arch && { echo "pacman"; return; }
   # 未安装或探测不到版本时直接 unknown（菜单本就会显示"未安装"，无需再提示）
   [[ -n "$cur" && "$cur" != "-" && "$cur" != "?" ]] || { echo "unknown"; return; }
   now=$(date +%s) || now=0
@@ -231,28 +232,75 @@ sb_kernel_version_status() {
 }
 
 # ---------- 安装主流程 ----------
+sb_install_action() {
+  if core_is_arch; then
+    if [[ -x "$SB_LOCAL_BIN" && -f "$SB_SERVICE" && -f "$SB_STATE" ]]; then
+      echo migrate
+    elif [[ -f "$SB_STATE" && -x "$SB_BIN" ]]; then
+      echo uninstall
+    else
+      echo install
+    fi
+  elif [[ -x "$SB_BIN" ]]; then
+    echo uninstall
+  else
+    echo install
+  fi
+}
+
+sb_migrate_arch() {
+  core_prompt_yn "迁移到 pacman 管理的 sing-box？现有节点配置与证书将继续使用" || return 0
+  core_ensure_deps || return 1
+  core_install_arch_kernel || return 1
+  cert_install_acme || return 1
+  local backup
+  backup=$(mktemp -d "${SB_LOCAL_BIN}.pre-pacman.XXXXXX") || return 1
+  if ! service_switch_arch_kernel; then
+    rmdir "$backup"
+    return 1
+  fi
+  SB_BIN="$SB_PACMAN_BIN"
+  mv "$SB_LOCAL_BIN" "$backup/sing-box" || return 1
+  ok "已迁移到 pacman，旧内核已备份至 $backup/sing-box"
+}
+
 sb_install() {
   core_root_check
-  if [[ -x "$SB_BIN" ]]; then
+  if [[ "$(sb_install_action)" == uninstall ]]; then
     warn "sing-box 已安装。如需重装请先执行卸载（主页面选项 1 -> 卸载）。"
     return 0
   fi
 
-  local arch; arch=$(core_detect_arch)
-  local ver; ver=$(sb_latest_version)
-  if [[ -z "$ver" ]]; then
-    error "无法获取 sing-box ${SB_VER_BASE}.x 最新版本（可能网络受限或 GitHub API 不可达）"
-    return 1
-  fi
   # 开始安装前统一检测并安装基础依赖（curl/openssl/iproute2/iptables-nft），幂等
   core_ensure_deps || return 1
-  sb_download "$ver" "$arch" || return 1
+  if core_is_arch; then
+    core_install_arch_kernel || return 1
+    SB_BIN="$SB_PACMAN_BIN"
+  else
+    local arch ver
+    arch=$(core_detect_arch) || return 1
+    if ! ver=$(sb_latest_version); then
+      error "无法获取 sing-box ${SB_VER_BASE}.x 最新版本（可能网络受限或 GitHub API 不可达）"
+      return 1
+    fi
+    sb_download "$ver" "$arch" || return 1
+  fi
 
   # 提前创建低权限用户，保证后续生成的配置/证书可被读取
   service_ensure_user
   # 立即建立管理命令软链：即使后续步骤（证书/服务启动）失败或卡住，sb 也始终可用
   chmod 755 "$SB_DIR/sb" 2>/dev/null || true
   ln -sf "$SB_DIR/sb" "$SB_SYMLINK" 2>/dev/null || true
+  if core_is_arch && [[ -f "$SB_STATE" ]]; then
+    # 软件包被移除后重新安装时，直接复用现有配置和凭证。
+    cert_install_acme || return 1
+    config_rebuild_from_state || return 1
+    service_install || return 1
+    service_start || return 1
+    node_gen || true
+    SB_KEEP_SCREEN=1
+    return 0
+  fi
   # 确保 IPv6 双栈监听（listen "::" 在 bindv6only=1 时仅监听 IPv6，致 IPv4 被 RST）
   core_ensure_dualstack
 
@@ -364,8 +412,8 @@ sb_install() {
              "$protos" "$port_socks" "$user_socks" "$pass_socks" || return 1
 
   # 服务
-  service_install
-  service_start
+  service_install || return 1
+  service_start || return 1
 
   # 端口监听实况校验：服务 active 不代表端口 bind 成功（端口被占用时进程会反复退出），
   # 而客户端 "connection refused" 的直接原因正是此处无监听，故必须显式校验并中止。
@@ -477,19 +525,33 @@ fw_disable_menu() {
 # ---------- 卸载 ----------
 sb_uninstall() {
   core_root_check
-  if [[ ! -x "$SB_BIN" && ! -f "$SB_CONF" ]]; then
+  if core_is_arch && [[ ! -x "$SB_LOCAL_BIN" && ! -f "$SB_STATE" ]]; then
+    warn "未检测到 easy-singbox 管理的安装"
+    return 0
+  elif [[ ! -x "$SB_BIN" && ! -f "$SB_CONF" && ! -f "$SB_STATE" ]]; then
     warn "未检测到已安装的 sing-box"
     return 0
   fi
   if ! core_prompt_yn "确认卸载 sing-box？将停止服务并删除二进制/配置（节点信息将丢失）"; then
     info "已取消卸载"; return 0
   fi
+  if core_is_arch && pacman -Q sing-box >/dev/null 2>&1; then
+    local was_running=0
+    service_is_active && was_running=1
+    service_stop
+    if ! pacman -Rn sing-box; then
+      (( ! was_running )) || service_start
+      error "pacman 未卸载 sing-box"
+      return 1
+    fi
+  fi
   # 清理 Hysteria2 端口跳跃重定向规则
   hop_remove
   service_remove_unit
-  rm -f "$SB_BIN" "$SB_SYMLINK" "${SB_BIN}.bak"
+  rm -f "$SB_LOCAL_BIN" "$SB_SYMLINK" "${SB_LOCAL_BIN}.bak"
   rm -f "$SB_CONF" "$SB_STATE" "$SB_NODES" "$SB_CF_ENV"
   if core_prompt_yn "同时删除证书目录 /etc/sing-box/ssl 与 acme.sh 账户(~/.acme.sh)？"; then
+    if core_is_arch; then rm -f "$ACME_ARCH_CRON"; fi
     rm -rf "$SB_DIR_SSL"
     rm -rf "$ACME_HOME"
     ok "已删除证书与 acme.sh 账户"
@@ -509,6 +571,16 @@ sb_uninstall() {
 # 一键升级到该大版本的最新 patch；若已装版本低于基线大版本（如旧 1.13）也会一并升到基线最新。
 sb_version_menu() {
   core_root_check
+  if core_is_arch; then
+    info "请使用 sudo pacman -Syu 更新 sing-box 和系统依赖"
+    if [[ "$(sb_install_action)" == migrate ]]; then
+      info "当前仍使用旧版内核，请先通过选项 1 迁移到 pacman"
+    elif [[ -f "$SB_STATE" ]]; then
+      info "本脚本适配 sing-box ${SB_VER_BASE}.x，更新后可通过选项 6 重启 sing-box"
+    fi
+    SB_KEEP_SCREEN=1
+    return 0
+  fi
   [[ -x "$SB_BIN" ]] || { error "尚未安装 sing-box"; return 1; }
 
   # 版本支持检测：脚本适配的内核基线大版本
@@ -704,7 +776,13 @@ sb_show_menu() {
   done <<< "$ipregion"
   (( ip_first )) && echo " IP / 地区 :"
   # 版本支持检测：已装内核大版本 < 脚本适配基线大版本(SB_VER_BASE)时红色告警
-  if [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
+  if [[ "$kstat" == pacman && "$ver" != "-" && "$ver" != "?" && -n "$ver" ]]; then
+    if [[ "$ver" != "$SB_VER_BASE".* && "$ver" != "$SB_VER_BASE" ]]; then
+      kernel_hint="${C_RED}[需要 ${SB_VER_BASE}.x，详见选项 7]${C_RST}"
+    elif [[ "$SB_BIN" == "$SB_PACMAN_BIN" ]]; then
+      kernel_hint="[pacman 管理]"
+    fi
+  elif [[ "$ver" != "-" && "$ver" != "?" && -n "$ver" ]] \
      && ! core_ver_ge "$ver" "$SB_VER_BASE"; then
     kernel_hint="${C_RED}[内核低于基线，选项 7 升级]${C_RST}"
   elif [[ "$kstat" == update:* ]]; then
@@ -721,17 +799,23 @@ sb_show_menu() {
     *)        echo -e " 脚本版本  : v${SB_SCRIPT_VERSION}  ${C_YEL}[远程版本未知，请检查网络]${C_RST}" ;;
   esac
   echo "--------------------------------------------------------------"
-  if [[ -x "$SB_BIN" ]]; then
-    echo " [1] 卸载 Sing-Box"
-  else
-    echo " [1] 一键安装 Sing-Box"
-  fi
+  local install_action
+  install_action=$(sb_install_action)
+  case "$install_action" in
+    migrate)   echo " [1] 迁移 Sing-Box 到 pacman" ;;
+    uninstall) echo " [1] 卸载 Sing-Box" ;;
+    install)   echo " [1] 一键安装 Sing-Box" ;;
+  esac
   echo " [2] 变更代理配置      (协议 / 端口 / 凭证)"
   echo " [3] 变更证书配置      (HTTP-01 / DNS-01 / 重签)"
   echo " [4] 启动 Sing-Box"
   echo " [5] 停止 Sing-Box"
   echo " [6] 重启 / 查看节点   (reload + 打印节点)"
-  echo " [7] 升级内核版本        (适配 sing-box ${SB_VER_BASE}.x，升到最新补丁)"
+  if [[ "$kstat" == pacman ]]; then
+    echo " [7] 查看内核更新命令    (sudo pacman -Syu)"
+  else
+    echo " [7] 升级内核版本        (适配 sing-box ${SB_VER_BASE}.x，升到最新补丁)"
+  fi
   echo " [8] 更新脚本            (当前 v$SB_SCRIPT_VERSION)"
   echo " [9] 诊断与日志        (排查节点不通，生成可发送的报告)"
   echo " [10] BBR + FQ 拥塞控制  (一键启用 / 禁用，独立于 sing-box)"
@@ -742,7 +826,11 @@ sb_show_menu() {
   choice=$(core_prompt "请选择 [0-11]")
   case "$choice" in
     1)
-      if [[ -x "$SB_BIN" ]]; then sb_uninstall; else sb_install; fi
+      case "$install_action" in
+        migrate)   sb_migrate_arch ;;
+        uninstall) sb_uninstall ;;
+        install)   sb_install ;;
+      esac
       ;;
     2) config_change || true ;;
     3) cert_change || true ;;
@@ -789,7 +877,7 @@ main_menu() {
     if [[ -n "${SB_KEEP_SCREEN:-}" ]]; then
       unset SB_KEEP_SCREEN
       echo ""
-      info "节点已保留在屏幕上，可长按复制；看完回车返回菜单（Ctrl+C 退出）"
+      info "看完回车返回菜单（Ctrl+C 退出）"
       read -r _ || true
     fi
     echo ""
