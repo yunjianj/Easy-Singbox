@@ -143,8 +143,7 @@ verify_content() {
            lib/core.sh lib/init.sh lib/service.sh lib/firewall.sh lib/port_hop.sh lib/cert.sh \
            lib/config.sh lib/node.sh lib/diag.sh lib/bbrfq.sh \
            lib/protocol/anytls.sh lib/protocol/hysteria2.sh lib/protocol/tuic.sh \
-           lib/protocol/socks.sh \
-           templates/config.json.tpl; do
+           lib/protocol/socks.sh; do
     want=$(printf '%s\n' "$map" | grep -m1 "^${f} " | awk '{print $2}' || true)
     if [[ -z "$want" ]]; then return 2; fi
     got=$(_blob_sha1 "$dir/$f" || true)
@@ -186,7 +185,7 @@ if [[ $EUID -eq 0 ]]; then
   echo "==> 安装到 $DEST ..."
   mkdir -p "$DEST"
   # 先清掉旧的模块目录，避免残留文件与新版本混用
-  rm -rf "$DEST/lib" "$DEST/templates"
+  rm -rf "$DEST/lib"
   cp -rf "$DIR/." "$DEST/"
   chmod 755 "$DEST/sb" "$DEST/install.sh" "$DEST/uninstall.sh" 2>/dev/null || true
   # 立即建立管理命令软链：即使后续 install.sh 中途失败/卡住，sb 也可用于排查
